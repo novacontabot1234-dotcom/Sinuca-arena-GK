@@ -1,3 +1,4 @@
+
 const express=require('express');
 const http=require('http');
 const path=require('path');
@@ -52,9 +53,15 @@ created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 `);
 
-/* CRIA O ADM AUTOMATICAMENTE */
-if(!db.prepare('SELECT id FROM users WHERE username=?').get('admin')){
-  const h=bcrypt.hashSync('1234',10);
+
+/* CRIA O ADM OU ATUALIZA A SENHA DO ADM */
+const adminExistente=db.prepare(
+  'SELECT * FROM users WHERE username=?'
+).get('admin');
+
+if(!adminExistente){
+
+  const h=bcrypt.hashSync('gk2026',10);
 
   const r=db.prepare(
     'INSERT INTO users(username,display_name,password_hash,chips,is_admin) VALUES(?,?,?,?,1)'
@@ -73,11 +80,24 @@ if(!db.prepare('SELECT id FROM users WHERE username=?').get('admin')){
     'credit',
     'Saldo inicial do ADM'
   );
+
+}else if(bcrypt.compareSync('1234',adminExistente.password_hash)){
+
+  const novaSenha=bcrypt.hashSync('gk2026',10);
+
+  db.prepare(
+    'UPDATE users SET password_hash=? WHERE username=?'
+  ).run(
+    novaSenha,
+    'admin'
+  );
 }
+
 
 const user=id=>db.prepare(
   'SELECT id,username,display_name,chips,wins,losses,is_admin FROM users WHERE id=?'
 ).get(id);
+
 
 const auth=(req,res,next)=>{
   try{
@@ -91,11 +111,13 @@ const auth=(req,res,next)=>{
   }
 };
 
+
 const tok=u=>jwt.sign(
   {id:u.id,admin:!!u.is_admin},
   SECRET,
   {expiresIn:'7d'}
 );
+
 
 const tx=(id,a,t,d)=>db.prepare(
   'INSERT INTO transactions(user_id,amount,type,description) VALUES(?,?,?,?)'
@@ -112,6 +134,7 @@ app.post('/api/register',(q,s)=>{
     });
 
   try{
+
     const r=db.prepare(
       'INSERT INTO users(username,display_name,password_hash) VALUES(?,?,?)'
     ).run(
@@ -135,15 +158,18 @@ app.post('/api/register',(q,s)=>{
     });
 
   }catch(e){
+
     s.status(400).json({
       error:'Usuário já existe.'
     });
+
   }
 });
 
 
 /* LOGIN */
 app.post('/api/login',(q,s)=>{
+
   const u=db.prepare(
     'SELECT * FROM users WHERE username=?'
   ).get(
@@ -159,6 +185,7 @@ app.post('/api/login',(q,s)=>{
     token:tok(u),
     user:user(u.id)
   });
+
 });
 
 
@@ -182,7 +209,9 @@ app.get('/api/players',auth,(q,s)=>{
 
 /* HISTÓRICO */
 app.get('/api/history',auth,(q,s)=>{
+
   s.json({
+
     matches:db.prepare(`
       SELECT
         m.*,
@@ -201,12 +230,15 @@ app.get('/api/history',auth,(q,s)=>{
     transactions:db.prepare(
       'SELECT * FROM transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 100'
     ).all(q.u.id)
+
   });
+
 });
 
 
 /* DESAFIO */
 app.post('/api/challenge',auth,(q,s)=>{
+
   const stake=Math.floor(Number(q.body.stake));
   const p2=user(Number(q.body.opponent));
   const p1=user(q.u.id);
@@ -236,11 +268,13 @@ app.post('/api/challenge',auth,(q,s)=>{
   s.json({
     matchId:id
   });
+
 });
 
 
 /* CONSULTAR PARTIDA */
 app.get('/api/match/:id',auth,(q,s)=>{
+
   const m=db.prepare(
     'SELECT * FROM matches WHERE id=?'
   ).get(q.params.id);
@@ -260,11 +294,13 @@ app.get('/api/match/:id',auth,(q,s)=>{
       p2:p2?.display_name||m.p2
     }
   });
+
 });
 
 
 /* ACEITAR PARTIDA */
 app.post('/api/match/:id/accept',auth,(q,s)=>{
+
   const m=db.prepare(
     'SELECT * FROM matches WHERE id=?'
   ).get(q.params.id);
@@ -283,6 +319,7 @@ app.post('/api/match/:id/accept',auth,(q,s)=>{
     });
 
   const run=db.transaction(()=>{
+
     db.prepare(
       'UPDATE users SET chips=chips-? WHERE id IN (?,?)'
     ).run(
@@ -308,6 +345,7 @@ app.post('/api/match/:id/accept',auth,(q,s)=>{
     db.prepare(
       "UPDATE matches SET status='active' WHERE id=?"
     ).run(m.id);
+
   });
 
   run();
@@ -317,11 +355,13 @@ app.post('/api/match/:id/accept',auth,(q,s)=>{
   s.json({
     ok:true
   });
+
 });
 
 
 /* FINALIZAR PARTIDA */
 app.post('/api/match/:id/finish',auth,(q,s)=>{
+
   const m=db.prepare(
     'SELECT * FROM matches WHERE id=?'
   ).get(q.params.id);
@@ -342,6 +382,7 @@ app.post('/api/match/:id/finish',auth,(q,s)=>{
   const l=w===m.p1?m.p2:m.p1;
 
   const run=db.transaction(()=>{
+
     db.prepare(
       'UPDATE users SET chips=chips+?,wins=wins+1 WHERE id=?'
     ).run(
@@ -366,6 +407,7 @@ app.post('/api/match/:id/finish',auth,(q,s)=>{
       w,
       m.id
     );
+
   });
 
   run();
@@ -377,11 +419,13 @@ app.post('/api/match/:id/finish',auth,(q,s)=>{
   s.json({
     ok:true
   });
+
 });
 
 
 /* PAINEL DO ADM */
 app.get('/api/admin/users',auth,(q,s)=>{
+
   if(!q.u.admin)
     return s.status(403).json({
       error:'ADM somente'
@@ -392,11 +436,13 @@ app.get('/api/admin/users',auth,(q,s)=>{
       'SELECT id,username,display_name,chips,wins,losses FROM users ORDER BY id DESC'
     ).all()
   });
+
 });
 
 
 /* LIBERAR / RETIRAR FICHAS */
 app.post('/api/admin/chips',auth,(q,s)=>{
+
   if(!q.u.admin)
     return s.status(403).json({
       error:'ADM somente'
@@ -431,12 +477,15 @@ app.post('/api/admin/chips',auth,(q,s)=>{
   s.json({
     user:user(id)
   });
+
 });
 
 
 /* SOCKET.IO */
 io.use((socket,next)=>{
+
   try{
+
     const token=socket.handshake.auth?.token;
 
     if(!token)
@@ -445,9 +494,13 @@ io.use((socket,next)=>{
     socket.user=jwt.verify(token,SECRET);
 
     next();
+
   }catch(e){
+
     next(new Error('Não autenticado'));
+
   }
+
 });
 
 
@@ -458,6 +511,7 @@ io.on('connection',socket=>{
   });
 
   socket.on('shot',data=>{
+
     if(!data||!data.matchId)
       return;
 
@@ -465,6 +519,7 @@ io.on('connection',socket=>{
       userId:socket.user.id,
       power:Number(data.power)||0
     });
+
   });
 
 });
