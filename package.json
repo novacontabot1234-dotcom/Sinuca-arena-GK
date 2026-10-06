@@ -1,10 +1,10 @@
-
 {
   "name": "sinuca-arena-gk",
   "version": "0.2.0",
   "description": "Sinuca Arena GK - jogo online 1v1",
   "main": "server.js",
   "scripts": {
+    "build": "npm rebuild better-sqlite3",
     "start": "node server.js"
   },
   "dependencies": {
