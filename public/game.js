@@ -185,6 +185,10 @@ async function boot() {
   try {
     me = (await api('/api/me')).user;
 
+    if (!me) {
+      throw new Error('Usuário não carregado.');
+    }
+
     if (sock) {
       sock.disconnect();
     }
@@ -275,6 +279,7 @@ async function boot() {
   } catch (e) {
     localStorage.removeItem('token');
     token = null;
+    me = null;
     login();
   }
 }
@@ -324,6 +329,14 @@ function nav() {
 ========================= */
 
 async function home() {
+
+  /* CORREÇÃO: evita tentar acessar me.chips
+     antes do usuário estar carregado */
+  if (!me) {
+    login();
+    return;
+  }
+
   if (match) {
     renderGame();
     return;
@@ -352,7 +365,9 @@ async function home() {
 
           <div class="balance">
             <span>🪙</span>
-            <b>${me.chips}</b>
+
+            <b>${me?.chips ?? 0}</b>
+
             <small>fichas</small>
           </div>
 
@@ -863,7 +878,6 @@ function drawTable() {
   const w = canvas.width;
   const h = canvas.height;
 
-  /* Campo */
   const cloth = ctx.createLinearGradient(0, 0, 0, h);
 
   cloth.addColorStop(0, '#0d7a50');
@@ -873,7 +887,6 @@ function drawTable() {
   ctx.fillStyle = cloth;
   ctx.fillRect(0, 0, w, h);
 
-  /* Borda */
   ctx.strokeStyle = '#c9a957';
   ctx.lineWidth = 12;
 
@@ -884,7 +897,6 @@ function drawTable() {
     h - 12
   );
 
-  /* Bolsas */
   const pockets = [
     [0,0],
     [w/2,0],
@@ -909,7 +921,6 @@ function drawTable() {
     ctx.fill();
   });
 
-  /* Linha central */
   ctx.strokeStyle = 'rgba(255,255,255,.10)';
   ctx.lineWidth = 2;
 
@@ -918,7 +929,6 @@ function drawTable() {
   ctx.lineTo(w/2, h-15);
   ctx.stroke();
 
-  /* Marca */
   ctx.beginPath();
   ctx.fillStyle = 'rgba(255,255,255,.35)';
   ctx.arc(
@@ -965,9 +975,7 @@ function drawBall(ball) {
 
   ctx.save();
 
-  /* sombra */
   ctx.beginPath();
-
   ctx.fillStyle = 'rgba(0,0,0,.35)';
 
   ctx.arc(
@@ -980,7 +988,6 @@ function drawBall(ball) {
 
   ctx.fill();
 
-  /* bola */
   ctx.beginPath();
 
   ctx.arc(
@@ -1009,7 +1016,6 @@ function drawBall(ball) {
   ctx.fillStyle = gradient;
   ctx.fill();
 
-  /* Listradas */
   if (ball.id >= 9 && ball.id <= 15) {
     ctx.save();
 
@@ -1037,7 +1043,6 @@ function drawBall(ball) {
     ctx.restore();
   }
 
-  /* Número */
   if (ball.id !== 0) {
     ctx.fillStyle = '#fff';
 
@@ -1095,7 +1100,6 @@ function drawAim() {
   const lineLength =
     260 + aim.power * 180;
 
-  /* linha de mira */
   ctx.save();
 
   ctx.setLineDash([8,8]);
@@ -1121,7 +1125,6 @@ function drawAim() {
 
   ctx.setLineDash([]);
 
-  /* taco */
   const back =
     60 + aim.power*150;
 
