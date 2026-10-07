@@ -1,16 +1,43 @@
-const A=document.getElementById('app');
-const T=document.getElementById('toast');
+const A = document.getElementById('app');
+const T = document.getElementById('toast');
 
-let token=localStorage.token;
-let me=null;
-let sock=null;
-let match=null;
-let pendingChallenge=null;
+let token = localStorage.token || null;
+let me = null;
+let sock = null;
+let match = null;
+let game = null;
+let pendingChallenge = null;
+let challengeBox = null;
+let canvas = null;
+let ctx = null;
 
-const api=async(u,o={})=>{
-  o.headers={
-    ...(o.headers||{}),
-    ...(token?{Authorization:'Bearer '+token}:{})
+let aim = {
+  active:false,
+  angle:0,
+  power:0,
+  startX:0,
+  startY:0,
+  x:0,
+  y:0
+};
+
+let pointerDown = false;
+
+const clamp = (n,a,b) => Math.max(a,Math.min(b,n));
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g,c => ({
+  '&':'&amp;',
+  '<':'&lt;',
+  '>':'&gt;',
+  '"':'&quot;',
+  "'":'&#39;'
+}[c]));
+
+const api = async (u,o={}) => {
+
+  o.headers = {
+    ...(o.headers || {}),
+    ...(token ? {Authorization:'Bearer '+token} : {})
   };
 
   if(o.body){
@@ -21,18 +48,21 @@ const api=async(u,o={})=>{
   const r=await fetch(u,o);
   const d=await r.json();
 
-  if(!r.ok)throw Error(d.error||'Erro');
+  if(!r.ok) throw Error(d.error || 'Erro');
 
   return d;
 };
 
-const note=x=>{
+const note = x => {
+
   T.textContent=x;
   T.style.display='block';
 
-  setTimeout(()=>{
+  clearTimeout(note.timer);
+
+  note.timer=setTimeout(()=>{
     T.style.display='none';
-  },2500);
+  },2600);
 };
 
 
@@ -45,10 +75,14 @@ function login(){
   A.innerHTML=`
   <div class="login card">
 
-    <h1>🎱 Sinuca <span class="gold">Arena</span></h1>
+    <div class="brand-mark">GK</div>
+
+    <h1>
+      Sinuca <span class="gold">Arena</span> GK
+    </h1>
 
     <p class="muted">
-      Versão 0.2 • 1v1 online
+      Versão 0.3 • 1v1 online
     </p>
 
     <div class="actions">
@@ -73,23 +107,29 @@ function login(){
 
 function loginForm(){
 
+  const f=document.getElementById('f');
+
   f.innerHTML=`
   <form>
 
-    <input class="input"
+    <input
+      class="input"
       id="u"
-      placeholder="Usuário">
+      placeholder="Usuário"
+      autocomplete="username">
 
     <br><br>
 
-    <input class="input"
+    <input
+      class="input"
       id="p"
       type="password"
-      placeholder="Senha">
+      placeholder="Senha"
+      autocomplete="current-password">
 
     <br><br>
 
-    <button class="btn">
+    <button class="btn full">
       Entrar
     </button>
 
@@ -110,10 +150,9 @@ function loginForm(){
       });
 
       token=d.token;
-
       localStorage.token=token;
 
-      boot();
+      await boot();
 
     }catch(x){
 
@@ -122,36 +161,42 @@ function loginForm(){
     }
 
   };
-
 }
 
 
 function regForm(){
 
+  const f=document.getElementById('f');
+
   f.innerHTML=`
   <form>
 
-    <input class="input"
+    <input
+      class="input"
       id="n"
       placeholder="Nome">
 
     <br><br>
 
-    <input class="input"
+    <input
+      class="input"
       id="u"
-      placeholder="Usuário">
+      placeholder="Usuário"
+      autocomplete="username">
 
     <br><br>
 
-    <input class="input"
+    <input
+      class="input"
       id="p"
       type="password"
-      placeholder="Senha">
+      placeholder="Senha"
+      autocomplete="new-password">
 
     <br><br>
 
-    <button class="btn">
-      Criar +100 fichas
+    <button class="btn full">
+      Criar conta +100 fichas
     </button>
 
   </form>`;
@@ -172,10 +217,9 @@ function regForm(){
       });
 
       token=d.token;
-
       localStorage.token=token;
 
-      boot();
+      await boot();
 
     }catch(x){
 
@@ -184,7 +228,6 @@ function regForm(){
     }
 
   };
-
 }
 
 
@@ -198,16 +241,24 @@ async function boot(){
 
     me=(await api('/api/me')).user;
 
+    if(sock){
+      sock.disconnect();
+    }
+
     sock=io({
       auth:{token}
     });
 
+    sock.on('connect_error',err=>{
+      note(err.message || 'Conexão indisponível.');
+    });
 
-    /* DESAFIO RECEBIDO */
+
+    /* DESAFIO */
 
     sock.on('challenge',d=>{
 
-      if(d.to!==me.id)return;
+      if(Number(d.to)!==Number(me.id)) return;
 
       pendingChallenge=d.matchId;
 
@@ -216,7 +267,7 @@ async function boot(){
     });
 
 
-    /* ATUALIZAÇÃO DE SALDO */
+    /* SALDO */
 
     sock.on('wallet',async()=>{
 
@@ -233,26 +284,105 @@ async function boot(){
     });
 
 
-    /* PARTIDA INICIADA */
+    /* PARTIDA ACEITA */
 
-    sock.on('started',()=>{
+    sock.on('matchAccepted',async d=>{
 
-      if(match){
+      if(!d?.matchId) return;
 
-        note('🎱 Partida iniciada!');
+      if(match?.id===d.matchId) return;
+
+      note('🎱 Desafio aceito! Preparando a mesa...');
+
+      try{
+
+        await startMatch(d.matchId);
+
+      }catch(e){
+
+        note(e.message);
 
       }
 
     });
 
 
-    /* PARTIDA FINALIZADA */
+    /* ESTADO DA MESA */
 
-    sock.on('finished',d=>{
+    sock.on('gameState',d=>{
 
-      if(!match)return;
+      if(!match || d.matchId!==match.id) return;
 
-      note('🏆 Partida finalizada!');
+      game=d;
+
+      /*
+        IMPORTANTE:
+        Não recriar a tela inteira a cada atualização
+        da física das bolas.
+      */
+
+      if(!canvas || !document.getElementById('poolCanvas')){
+
+        renderGame();
+
+      }else{
+
+        draw();
+
+      }
+
+    });
+
+
+    /* FIM DE PARTIDA */
+
+    sock.on('gameOver',d=>{
+
+      if(!match || d.matchId!==match.id) return;
+
+      game={
+        ...game,
+        winner:d.winner,
+        moving:false
+      };
+
+      draw();
+
+      const win=
+        Number(d.winner)===Number(me.id);
+
+      note(
+        win
+        ? '🏆 Você venceu a partida!'
+        : '💥 Você perdeu a partida.'
+      );
+
+      setTimeout(()=>{
+
+        match=null;
+        game=null;
+
+        home();
+
+      },4500);
+
+    });
+
+
+    sock.on('started',()=>{
+
+      if(match){
+        note('🎱 Partida iniciada!');
+      }
+
+    });
+
+
+    sock.on('finished',()=>{
+
+      if(match){
+        note('🏆 Partida finalizada!');
+      }
 
     });
 
@@ -272,15 +402,6 @@ async function boot(){
 }
 
 
-async function refresh(){
-
-  me=(await api('/api/me')).user;
-
-  home();
-
-}
-
-
 /* =========================
    NAVEGAÇÃO
 ========================= */
@@ -290,34 +411,29 @@ function nav(){
   return `
   <div class="nav">
 
-    <button class="btn dark"
-      onclick="home()">
+    <button class="btn dark" onclick="home()">
       🏠 Lobby
     </button>
 
-    <button class="btn dark"
-      onclick="history()">
+    <button class="btn dark" onclick="historyPage()">
       📜 Histórico
     </button>
 
-    <button class="btn dark"
-      onclick="invite()">
+    <button class="btn dark" onclick="invite()">
       🔗 Divulgar
     </button>
 
     ${
-      me.is_admin
+      me?.is_admin
       ?
-      `<button class="btn dark"
-        onclick="admin()">
+      `<button class="btn dark" onclick="admin()">
         👑 ADM
       </button>`
       :
       ''
     }
 
-    <button class="btn dark"
-      onclick="logout()">
+    <button class="btn dark" onclick="logout()">
       Sair
     </button>
 
@@ -332,120 +448,116 @@ function nav(){
 
 async function home(){
 
-  const d=await api('/api/players');
+  if(match){
 
-  A.innerHTML=`
-  <div class="wrap">
+    renderGame();
 
-    ${nav()}
+    return;
 
-    <div class="card">
+  }
 
-      <h1>
-        Desafie seus amigos
-      </h1>
+  try{
 
-      <p class="muted">
-        🪙 Seu saldo:
-        <b class="gold">
-          ${me.chips}
-        </b>
-        fichas
-      </p>
+    const d=await api('/api/players');
 
-    </div>
+    A.innerHTML=`
+    <div class="wrap">
+
+      ${nav()}
+
+      <div class="hero card">
+
+        <div>
+
+          <div class="eyebrow">
+            GK • 1V1 ONLINE
+          </div>
+
+          <h1>
+            Desafie seus amigos
+          </h1>
+
+          <p class="muted">
+            Mesa de sinuca com mira, taco,
+            potência e tacada por arrastar.
+          </p>
+
+        </div>
+
+        <div class="balance">
+
+          <span>🪙</span>
+
+          <b>${me.chips}</b>
+
+          <small>fichas</small>
+
+        </div>
+
+      </div>
 
 
-    <div class="card">
+      <div class="card">
 
-      <h2>
-        Jogadores
-      </h2>
+        <h2>Jogadores</h2>
 
-      ${
-        d.players.map(p=>`
+        ${
+          d.players.map(p=>`
 
-        <div class="row">
+          <div class="player-row">
 
-          <div>
+            <div class="player-main">
 
-            <b>
-              ${p.display_name}
-            </b>
+              <div class="avatar">
+                ${esc((p.display_name||'?').slice(0,1).toUpperCase())}
+              </div>
 
-            <div class="muted">
-              ${p.wins}V / ${p.losses}D
-              • 🪙 ${p.chips}
+              <div>
+
+                <b>
+                  ${esc(p.display_name)}
+                </b>
+
+                <div class="muted small">
+                  ${p.wins}V / ${p.losses}D
+                  • 🪙 ${p.chips}
+                </div>
+
+              </div>
+
+            </div>
+
+
+            <div class="challenge-actions">
+
+              <input
+                class="input stake-input"
+                id="s${p.id}"
+                type="number"
+                value="10"
+                min="10"
+                step="10">
+
+              <button
+                class="btn"
+                onclick="challenge(${p.id})">
+
+                Desafiar
+
+              </button>
+
             </div>
 
           </div>
 
+          `).join('')
+          ||
+          '<p class="muted">Nenhum outro jogador cadastrado.</p>'
+        }
 
-          <div class="actions">
+      </div>
 
-            <input
-              class="input"
-              style="width:90px"
-              id="s${p.id}"
-              type="number"
-              value="10"
-              min="10">
-
-            <button
-              class="btn"
-              onclick="challenge(${p.id})">
-
-              Desafiar
-
-            </button>
-
-          </div>
-
-        </div>
-
-        `).join('')
-        ||
-        '<p class="muted">Nenhum outro jogador online/cadastrado.</p>'
-      }
-
-    </div>
-
-  </div>`;
-
-}
-
-
-/* =========================
-   ENVIAR DESAFIO
-========================= */
-
-async function challenge(id){
-
-  try{
-
-    const input=document.getElementById('s'+id);
-
-    const stake=Number(input.value);
-
-    if(!Number.isFinite(stake)||stake<10){
-
-      note('A aposta mínima é 10 fichas.');
-
-      return;
-
-    }
-
-
-    const d=await api('/api/challenge',{
-      method:'POST',
-      body:{
-        opponent:id,
-        stake
-      }
-    });
-
-
-    note('🎯 Desafio enviado! Aguarde o jogador aceitar.');
+    </div>`;
 
   }catch(e){
 
@@ -457,75 +569,117 @@ async function challenge(id){
 
 
 /* =========================
-   DESAFIO RECEBIDO
+   DESAFIO
 ========================= */
+
+async function challenge(id){
+
+  try{
+
+    const input=document.getElementById('s'+id);
+
+    const stake=Number(input?.value || 0);
+
+    if(!Number.isFinite(stake)||stake<10){
+
+      note('A aposta mínima é 10 fichas.');
+
+      return;
+
+    }
+
+    await api('/api/challenge',{
+      method:'POST',
+      body:{
+        opponent:id,
+        stake
+      }
+    });
+
+    note('🎯 Desafio enviado! Aguarde a aceitação.');
+
+  }catch(e){
+
+    note(e.message);
+
+  }
+
+}
+
 
 async function showChallenge(matchId){
 
   try{
 
+    if(challengeBox){
+      challengeBox.remove();
+    }
+
     const d=await api('/api/match/'+matchId);
 
     const m=d.match;
 
-    const box=document.createElement('div');
+    challengeBox=document.createElement('div');
 
-    box.id='challengeBox';
+    challengeBox.className='challenge-modal';
 
-    box.style.position='fixed';
-    box.style.left='50%';
-    box.style.top='50%';
-    box.style.transform='translate(-50%,-50%)';
-    box.style.zIndex='9999';
-    box.style.width='min(420px,90%)';
-    box.style.background='#0d1612';
-    box.style.border='1px solid #dfc373';
-    box.style.borderRadius='18px';
-    box.style.padding='24px';
-    box.style.boxShadow='0 20px 70px #000';
+    challengeBox.innerHTML=`
 
-    box.innerHTML=`
+      <div class="challenge-panel">
 
-      <h2>
-        🎯 Desafio recebido!
-      </h2>
+        <div class="duel-icon">
+          🎱
+        </div>
 
-      <p>
-        <b>${m.p1}</b>
-        desafiou você para uma partida.
-      </p>
+        <div class="eyebrow">
+          DESAFIO 1V1
+        </div>
 
-      <p class="muted">
-        Aposta:
-        <b class="gold">
-          🪙 ${m.stake}
-        </b>
-        fichas
-      </p>
+        <h2>
+          ${esc(m.p1)} te desafiou
+        </h2>
 
-      <div class="actions">
+        <p class="muted">
+          Prepare-se para a partida.
+        </p>
 
-        <button
-          class="btn"
-          onclick="acceptChallenge('${matchId}')">
+        <div class="stake-card">
 
-          ✅ ACEITAR
+          <span>Aposta</span>
 
-        </button>
+          <strong>
+            🪙 ${m.stake}
+          </strong>
 
-        <button
-          class="btn dark"
-          onclick="rejectChallenge('${matchId}')">
+          <small>
+            Prêmio: ${m.stake*2} fichas
+          </small>
 
-          ❌ RECUSAR
+        </div>
 
-        </button>
+        <div class="actions center">
 
-      </div>
+          <button
+            class="btn accept-btn"
+            onclick="acceptChallenge('${matchId}')">
 
-    `;
+            ✅ ACEITAR
 
-    document.body.appendChild(box);
+          </button>
+
+          <button
+            class="btn dark"
+            onclick="rejectChallenge('${matchId}')">
+
+            ❌ RECUSAR
+
+          </button>
+
+        </div>
+
+      </div>`;
+
+    document.body.appendChild(challengeBox);
 
     pendingChallenge=matchId;
 
@@ -538,29 +692,23 @@ async function showChallenge(matchId){
 }
 
 
-/* =========================
-   ACEITAR DESAFIO
-========================= */
-
 async function acceptChallenge(id){
 
   try{
 
-    const box=document.getElementById('challengeBox');
+    challengeBox?.remove();
 
-    if(box)box.remove();
-
+    challengeBox=null;
 
     await api('/api/match/'+id+'/accept',{
       method:'POST'
     });
 
-
     pendingChallenge=null;
 
     await startMatch(id);
 
-    note('🎱 Desafio aceito!');
+    note('🎱 Partida aceita!');
 
   }catch(e){
 
@@ -571,17 +719,21 @@ async function acceptChallenge(id){
 }
 
 
-/* =========================
-   RECUSAR DESAFIO
-========================= */
-
 async function rejectChallenge(id){
 
-  const box=document.getElementById('challengeBox');
+  challengeBox?.remove();
 
-  if(box)box.remove();
+  challengeBox=null;
 
   pendingChallenge=null;
+
+  try{
+
+    await api('/api/match/'+id+'/reject',{
+      method:'POST'
+    });
+
+  }catch(e){}
 
   note('Desafio recusado.');
 
@@ -598,9 +750,46 @@ async function startMatch(id){
 
   match=d.match;
 
-  sock.emit('join',id);
+  const s=await new Promise(resolve=>{
 
-  renderTable();
+    const onState=st=>{
+
+      if(st.matchId===id){
+
+        sock.off('gameState',onState);
+
+        clearTimeout(timer);
+
+        resolve(st);
+
+      }
+
+    };
+
+    sock.on('gameState',onState);
+
+    sock.emit('join',id);
+
+    const timer=setTimeout(()=>{
+
+      sock.off('gameState',onState);
+
+      resolve(null);
+
+    },1500);
+
+  });
+
+  game=s || {
+    matchId:id,
+    moving:false,
+    currentPlayer:Number(match.p1_id || 0),
+    winner:null,
+    groups:{},
+    balls:[]
+  };
+
+  renderGame();
 
 }
 
@@ -609,481 +798,143 @@ async function startMatch(id){
    MESA
 ========================= */
 
-function renderTable(){
+function renderGame(){
 
   A.innerHTML=`
 
-  <div class="wrap">
+  <div class="game-wrap">
 
-    ${nav()}
-
-    <div class="card">
-
-      <h2>
-        🎱 ${match.p1} × ${match.p2}
-      </h2>
-
-      <p class="muted">
-
-        Aposta 🪙 ${match.stake}
-
-        •
-
-        prêmio 🪙 ${match.stake*2}
-
-      </p>
-
-
-      <div class="tablebox">
-
-        <div
-          class="table"
-          id="table">
-
-          <i class="pocket a"></i>
-          <i class="pocket b"></i>
-          <i class="pocket c"></i>
-          <i class="pocket d"></i>
-          <i class="pocket e"></i>
-          <i class="pocket f"></i>
-
-
-          <i
-            class="ball white"
-            id="cue"
-            style="left:18%;top:50%">
-          </i>
-
-          <i
-            class="ball yellow"
-            style="left:65%;top:48%">
-          </i>
-
-          <i
-            class="ball red"
-            style="left:70%;top:43%">
-          </i>
-
-          <i
-            class="ball blue"
-            style="left:70%;top:53%">
-          </i>
-
-          <i
-            class="ball black"
-            style="left:75%;top:48%">
-          </i>
-
-          <i
-            class="cueLine"
-            id="line">
-          </i>
-
-        </div>
-
-      </div>
-
-
-      <div class="power">
-
-        <b>
-          Potência da tacada
-        </b>
-
-        <input
-          id="pow"
-          type="range"
-          min="1"
-          max="100"
-          value="50">
-
-
-        <div
-          class="actions"
-          style="justify-content:center;margin-top:10px">
-
-          <button
-            class="btn"
-            onclick="aim()">
-
-            🎯 Mostrar mira
-
-          </button>
-
-          <button
-            class="btn"
-            onclick="shoot()">
-
-            💥 TACADA
-
-          </button>
-
-        </div>
-
-      </div>
-
-
-      <p class="muted">
-
-        Partida online 1v1.
-        Ajuste a mira e escolha a potência.
-
-      </p>
-
-    </div>
-
-  </div>`;
-
-
-
-  document.getElementById('table').onclick=e=>{
-
-    const r=e.currentTarget.getBoundingClientRect();
-
-    const x=e.clientX-r.left;
-    const y=e.clientY-r.top;
-
-    const c=document
-      .getElementById('cue')
-      .getBoundingClientRect();
-
-    const cx=c.left+c.width/2-r.left;
-    const cy=c.top+c.height/2-r.top;
-
-    const line=document.getElementById('line');
-
-    const ang=Math.atan2(
-      y-cy,
-      x-cx
-    );
-
-    line.style.display='block';
-
-    line.style.left=cx+'px';
-
-    line.style.top=cy+'px';
-
-    line.style.width=
-      Math.hypot(x-cx,y-cy)+'px';
-
-    line.style.transform=
-      `rotate(${ang}rad)`;
-
-  };
-
-}
-
-
-/* =========================
-   MIRA
-========================= */
-
-function aim(){
-
-  document
-    .getElementById('line')
-    .style.display='block';
-
-  note(
-    '🎯 Mira ativada: toque na mesa para escolher a direção.'
-  );
-
-}
-
-
-/* =========================
-   TACADA
-========================= */
-
-function shoot(){
-
-  if(!match){
-
-    note('Nenhuma partida ativa.');
-
-    return;
-
-  }
-
-  const power=Number(
-    document.getElementById('pow').value
-  );
-
-
-  sock.emit('shot',{
-    matchId:match.id,
-    power
-  });
-
-
-  note(
-    '💥 Tacada enviada com potência '+power
-  );
-
-}
-
-
-/* =========================
-   HISTÓRICO
-========================= */
-
-async function history(){
-
-  const d=await api('/api/history');
-
-  A.innerHTML=`
-
-  <div class="wrap">
-
-    ${nav()}
-
-    <div class="card">
-
-      <h2>
-        📜 Histórico
-      </h2>
-
-      ${
-        d.matches.map(m=>`
-
-        <div class="row">
-
-          <span>
-            ${m.p1_name} × ${m.p2_name}
-          </span>
-
-          <b>
-            ${m.status}
-          </b>
-
-        </div>
-
-        `).join('')
-        ||
-        '<p class="muted">Nenhuma partida.</p>'
-      }
-
-    </div>
-
-
-    <div class="card">
-
-      <h2>
-        🪙 Fichas
-      </h2>
-
-      ${
-        d.transactions.map(x=>`
-
-        <div class="row">
-
-          <span>
-            ${x.description}
-          </span>
-
-          <b>
-            ${x.amount>0?'+':''}${x.amount}
-          </b>
-
-        </div>
-
-        `).join('')
-      }
-
-    </div>
-
-  </div>`;
-
-}
-
-
-/* =========================
-   DIVULGAR
-========================= */
-
-function invite(){
-
-  const u=location.origin;
-
-  A.innerHTML=`
-
-  <div class="wrap">
-
-    ${nav()}
-
-    <div class="card">
-
-      <h2>
-        🔗 Divulgue a Sinuca Arena
-      </h2>
-
-      <p class="muted">
-        Envie este link para seus amigos.
-      </p>
-
-      <div class="card">
-        ${u}
-      </div>
+    <div class="game-topbar">
 
       <button
-        class="btn"
-        onclick="navigator.clipboard.writeText('${u}');note('Link copiado!')">
+        class="btn dark mini"
+        onclick="leaveMatch()">
 
-        📋 Copiar link
+        ← Lobby
 
       </button>
 
-      <a
-        class="btn"
-        href="https://wa.me/?text=${encodeURIComponent('🎱 Venha jogar Sinuca Arena 1v1! '+u)}"
-        target="_blank">
+      <div class="duel-names">
 
-        WhatsApp
+        <span>
+          ${esc(match?.p1 || 'Jogador 1')}
+        </span>
 
-      </a>
+        <b>×</b>
+
+        <span>
+          ${esc(match?.p2 || 'Jogador 2')}
+        </span>
+
+      </div>
+
+      <div class="stake-pill">
+        🪙 ${match?.stake || 0}
+      </div>
 
     </div>
 
-  </div>`;
 
-}
+    <div
+      class="turn-bar"
+      id="turnBar">
 
+      ${turnText()}
 
-/* =========================
-   ADMIN
-========================= */
-
-async function admin(){
-
-  const d=await api('/api/admin/users');
-
-  A.innerHTML=`
-
-  <div class="wrap">
-
-    ${nav()}
-
-    <div class="card">
-
-      <h2>
-        👑 Painel ADM — Liberação de fichas
-      </h2>
-
-      <p class="muted">
-        Somente o ADM pode liberar ou retirar fichas.
-      </p>
-
-      ${
-        d.users.map(u=>`
-
-        <div class="row">
-
-          <div>
-
-            <b>
-              ${u.display_name}
-            </b>
-
-            <div class="muted">
-              @${u.username}
-              • 🪙 ${u.chips}
-            </div>
-
-          </div>
+    </div>
 
 
-          <div class="actions">
+    <div class="table-shell">
 
-            <input
-              class="input"
-              style="width:90px"
-              id="a${u.id}"
-              value="100"
-              type="number">
+      <canvas
+        id="poolCanvas"
+        width="1050"
+        height="600">
+      </canvas>
+
+      <div
+        class="touch-help"
+        id="touchHelp">
+
+        Arraste a partir da bola branca
+        para mirar e puxar a tacada
+
+      </div>
+
+    </div>
 
 
-            <button
-              class="btn"
-              onclick="chips(${u.id},'add')">
+    <div class="controls">
 
-              + Liberar
+      <div class="power-info">
 
-            </button>
+        <span>FORÇA</span>
 
+        <strong id="powerText">
+          0%
+        </strong>
 
-            <button
-              class="btn dark"
-              onclick="chips(${u.id},'remove')">
+      </div>
 
-              − Retirar
+      <div class="power-track">
 
-            </button>
-
-          </div>
-
+        <div
+          class="power-fill"
+          id="powerFill">
         </div>
 
-        `).join('')
-      }
+      </div>
 
+      <button
+        class="btn dark"
+        onclick="resetAim()">
+
+        ↺ Mira
+
+      </button>
+
+      <button
+        class="btn shot-btn"
+        id="shotBtn"
+        onclick="shootNow()">
+
+        TACADA
+
+      </button>
+
+    </div>
+
+
+    <div class="game-tip muted">
+      ${groupsText()}
     </div>
 
   </div>`;
 
+  canvas=document.getElementById('poolCanvas');
+
+  ctx=canvas.getContext('2d');
+
+  bindAimControls();
+
+  resetAim();
+
+  draw();
+
 }
 
 
-async function chips(id,action){
+/* =========================
+   TEXTO DA VEZ
+========================= */
 
-  try{
+function turnText(){
 
-    await api('/api/admin/chips',{
-      method:'POST',
-      body:{
-        userId:id,
-        amount:Number(
-          document.getElementById('a'+id).value
-        ),
-        action
-      }
-    });
-
-    note('Saldo atualizado.');
-
-    admin();
-
-  }catch(e){
-
-    note(e.message);
-
+  if(!game){
+    return 'Carregando mesa...';
   }
 
-}
+  if(game.winner){
 
-
-/* =========================
-   SAIR
-========================= */
-
-function logout(){
-
-  localStorage.removeItem('token');
-
-  location.reload();
-
-}
-
-
-/* =========================
-   INICIAR
-========================= */
-
-if(token){
-
-  boot();
-
-}else{
-
-  login();
-
-}
+    return Number(game.winner)===Number(me.id)
+      ?
