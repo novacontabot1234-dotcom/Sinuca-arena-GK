@@ -12,57 +12,55 @@ let canvas = null;
 let ctx = null;
 
 let aim = {
-  active:false,
-  angle:0,
-  power:0,
-  startX:0,
-  startY:0,
-  x:0,
-  y:0
+  active: false,
+  angle: 0,
+  power: 0,
+  startX: 0,
+  startY: 0,
+  x: 0,
+  y: 0
 };
 
 let pointerDown = false;
 
-const clamp = (n,a,b) => Math.max(a,Math.min(b,n));
+const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 
-const esc = s => String(s ?? '').replace(/[&<>"']/g,c => ({
-  '&':'&amp;',
-  '<':'&lt;',
-  '>':'&gt;',
-  '"':'&quot;',
-  "'":'&#39;'
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
 }[c]));
 
-const api = async (u,o={}) => {
-
+const api = async (u, o = {}) => {
   o.headers = {
     ...(o.headers || {}),
-    ...(token ? {Authorization:'Bearer '+token} : {})
+    ...(token ? { Authorization: 'Bearer ' + token } : {})
   };
 
-  if(o.body){
-    o.headers['Content-Type']='application/json';
-    o.body=JSON.stringify(o.body);
+  if (o.body) {
+    o.headers['Content-Type'] = 'application/json';
+    o.body = JSON.stringify(o.body);
   }
 
-  const r=await fetch(u,o);
-  const d=await r.json();
+  const r = await fetch(u, o);
+  const d = await r.json();
 
-  if(!r.ok) throw Error(d.error || 'Erro');
+  if (!r.ok) throw Error(d.error || 'Erro');
 
   return d;
 };
 
 const note = x => {
-
-  T.textContent=x;
-  T.style.display='block';
+  T.textContent = x;
+  T.style.display = 'block';
 
   clearTimeout(note.timer);
 
-  note.timer=setTimeout(()=>{
-    T.style.display='none';
-  },2600);
+  note.timer = setTimeout(() => {
+    T.style.display = 'none';
+  }, 2600);
 };
 
 
@@ -70,163 +68,149 @@ const note = x => {
    LOGIN
 ========================= */
 
-function login(){
+function login() {
+  A.innerHTML = `
+    <div class="login card">
 
-  A.innerHTML=`
-  <div class="login card">
+      <div class="brand-mark">GK</div>
 
-    <div class="brand-mark">GK</div>
+      <h1>
+        Sinuca <span class="gold">Arena</span> GK
+      </h1>
 
-    <h1>
-      Sinuca <span class="gold">Arena</span> GK
-    </h1>
+      <p class="muted">
+        Versão 0.3 • 1v1 online
+      </p>
 
-    <p class="muted">
-      Versão 0.3 • 1v1 online
-    </p>
+      <div class="actions">
+        <button class="btn" onclick="loginForm()">
+          Entrar
+        </button>
 
-    <div class="actions">
+        <button class="btn dark" onclick="regForm()">
+          Criar conta
+        </button>
+      </div>
 
-      <button class="btn" onclick="loginForm()">
-        Entrar
-      </button>
-
-      <button class="btn dark" onclick="regForm()">
-        Criar conta
-      </button>
+      <div id="f"></div>
 
     </div>
-
-    <div id="f"></div>
-
-  </div>`;
+  `;
 
   loginForm();
 }
 
+function loginForm() {
+  const f = document.getElementById('f');
 
-function loginForm(){
+  f.innerHTML = `
+    <form>
 
-  const f=document.getElementById('f');
+      <input
+        class="input"
+        id="u"
+        placeholder="Usuário"
+        autocomplete="username">
 
-  f.innerHTML=`
-  <form>
+      <br><br>
 
-    <input
-      class="input"
-      id="u"
-      placeholder="Usuário"
-      autocomplete="username">
+      <input
+        class="input"
+        id="p"
+        type="password"
+        placeholder="Senha"
+        autocomplete="current-password">
 
-    <br><br>
+      <br><br>
 
-    <input
-      class="input"
-      id="p"
-      type="password"
-      placeholder="Senha"
-      autocomplete="current-password">
+      <button class="btn full">
+        Entrar
+      </button>
 
-    <br><br>
+    </form>
+  `;
 
-    <button class="btn full">
-      Entrar
-    </button>
-
-  </form>`;
-
-  f.querySelector('form').onsubmit=async e=>{
-
+  f.querySelector('form').onsubmit = async e => {
     e.preventDefault();
 
-    try{
-
-      const d=await api('/api/login',{
-        method:'POST',
-        body:{
-          username:u.value,
-          password:p.value
+    try {
+      const d = await api('/api/login', {
+        method: 'POST',
+        body: {
+          username: u.value,
+          password: p.value
         }
       });
 
-      token=d.token;
-      localStorage.token=token;
+      token = d.token;
+      localStorage.token = token;
 
       await boot();
 
-    }catch(x){
-
+    } catch (x) {
       note(x.message);
-
     }
-
   };
 }
 
+function regForm() {
+  const f = document.getElementById('f');
 
-function regForm(){
+  f.innerHTML = `
+    <form>
 
-  const f=document.getElementById('f');
+      <input
+        class="input"
+        id="n"
+        placeholder="Nome">
 
-  f.innerHTML=`
-  <form>
+      <br><br>
 
-    <input
-      class="input"
-      id="n"
-      placeholder="Nome">
+      <input
+        class="input"
+        id="u"
+        placeholder="Usuário"
+        autocomplete="username">
 
-    <br><br>
+      <br><br>
 
-    <input
-      class="input"
-      id="u"
-      placeholder="Usuário"
-      autocomplete="username">
+      <input
+        class="input"
+        id="p"
+        type="password"
+        placeholder="Senha"
+        autocomplete="new-password">
 
-    <br><br>
+      <br><br>
 
-    <input
-      class="input"
-      id="p"
-      type="password"
-      placeholder="Senha"
-      autocomplete="new-password">
+      <button class="btn full">
+        Criar conta +100 fichas
+      </button>
 
-    <br><br>
+    </form>
+  `;
 
-    <button class="btn full">
-      Criar conta +100 fichas
-    </button>
-
-  </form>`;
-
-  f.querySelector('form').onsubmit=async e=>{
-
+  f.querySelector('form').onsubmit = async e => {
     e.preventDefault();
 
-    try{
-
-      const d=await api('/api/register',{
-        method:'POST',
-        body:{
-          displayName:n.value,
-          username:u.value,
-          password:p.value
+    try {
+      const d = await api('/api/register', {
+        method: 'POST',
+        body: {
+          displayName: n.value,
+          username: u.value,
+          password: p.value
         }
       });
 
-      token=d.token;
-      localStorage.token=token;
+      token = d.token;
+      localStorage.token = token;
 
       await boot();
 
-    }catch(x){
-
+    } catch (x) {
       note(x.message);
-
     }
-
   };
 }
 
@@ -235,170 +219,111 @@ function regForm(){
    INICIALIZAÇÃO
 ========================= */
 
-async function boot(){
+async function boot() {
+  try {
+    me = (await api('/api/me')).user;
 
-  try{
-
-    me=(await api('/api/me')).user;
-
-    if(sock){
+    if (sock) {
       sock.disconnect();
     }
 
-    sock=io({
-      auth:{token}
+    sock = io({
+      auth: { token }
     });
 
-    sock.on('connect_error',err=>{
+    sock.on('connect_error', err => {
       note(err.message || 'Conexão indisponível.');
     });
 
+    sock.on('challenge', d => {
+      if (Number(d.to) !== Number(me.id)) return;
 
-    /* DESAFIO */
-
-    sock.on('challenge',d=>{
-
-      if(Number(d.to)!==Number(me.id)) return;
-
-      pendingChallenge=d.matchId;
+      pendingChallenge = d.matchId;
 
       showChallenge(d.matchId);
-
     });
 
+    sock.on('wallet', async () => {
+      try {
+        me = (await api('/api/me')).user;
 
-    /* SALDO */
-
-    sock.on('wallet',async()=>{
-
-      try{
-
-        me=(await api('/api/me')).user;
-
-        if(!match){
+        if (!match) {
           home();
         }
-
-      }catch(e){}
-
+      } catch (e) {}
     });
 
+    sock.on('matchAccepted', async d => {
+      if (!d?.matchId) return;
 
-    /* PARTIDA ACEITA */
-
-    sock.on('matchAccepted',async d=>{
-
-      if(!d?.matchId) return;
-
-      if(match?.id===d.matchId) return;
+      if (match?.id === d.matchId) return;
 
       note('🎱 Desafio aceito! Preparando a mesa...');
 
-      try{
-
+      try {
         await startMatch(d.matchId);
-
-      }catch(e){
-
+      } catch (e) {
         note(e.message);
-
       }
-
     });
 
+    sock.on('gameState', d => {
+      if (!match || d.matchId !== match.id) return;
 
-    /* ESTADO DA MESA */
+      game = d;
 
-    sock.on('gameState',d=>{
-
-      if(!match || d.matchId!==match.id) return;
-
-      game=d;
-
-      /*
-        IMPORTANTE:
-        Não recriar a tela inteira a cada atualização
-        da física das bolas.
-      */
-
-      if(!canvas || !document.getElementById('poolCanvas')){
-
+      if (!canvas || !document.getElementById('poolCanvas')) {
         renderGame();
-
-      }else{
-
+      } else {
         draw();
-
       }
-
     });
 
+    sock.on('turn', d => {
+      if (!game || !match || d.matchId !== match.id) return;
 
-    /* FIM DE PARTIDA */
+      game.currentPlayer = d.currentPlayer;
+      game.moving = false;
 
-    sock.on('gameOver',d=>{
+      updateTurnBar();
+      updateShotButton();
+    });
 
-      if(!match || d.matchId!==match.id) return;
+    sock.on('gameOver', d => {
+      if (!match || d.matchId !== match.id) return;
 
-      game={
+      game = {
         ...game,
-        winner:d.winner,
-        moving:false
+        winner: d.winner,
+        moving: false
       };
 
       draw();
 
-      const win=
-        Number(d.winner)===Number(me.id);
+      const win = Number(d.winner) === Number(me.id);
 
       note(
         win
-        ? '🏆 Você venceu a partida!'
-        : '💥 Você perdeu a partida.'
+          ? '🏆 Você venceu a partida!'
+          : '💥 Você perdeu a partida.'
       );
 
-      setTimeout(()=>{
-
-        match=null;
-        game=null;
-
+      setTimeout(() => {
+        match = null;
+        game = null;
+        canvas = null;
+        ctx = null;
         home();
-
-      },4500);
-
+      }, 4500);
     });
-
-
-    sock.on('started',()=>{
-
-      if(match){
-        note('🎱 Partida iniciada!');
-      }
-
-    });
-
-
-    sock.on('finished',()=>{
-
-      if(match){
-        note('🏆 Partida finalizada!');
-      }
-
-    });
-
 
     home();
 
-  }catch(e){
-
+  } catch (e) {
     localStorage.removeItem('token');
-
-    token=null;
-
+    token = null;
     login();
-
   }
-
 }
 
 
@@ -406,39 +331,38 @@ async function boot(){
    NAVEGAÇÃO
 ========================= */
 
-function nav(){
-
+function nav() {
   return `
-  <div class="nav">
+    <div class="nav">
 
-    <button class="btn dark" onclick="home()">
-      🏠 Lobby
-    </button>
+      <button class="btn dark" onclick="home()">
+        🏠 Lobby
+      </button>
 
-    <button class="btn dark" onclick="historyPage()">
-      📜 Histórico
-    </button>
+      <button class="btn dark" onclick="historyPage()">
+        📜 Histórico
+      </button>
 
-    <button class="btn dark" onclick="invite()">
-      🔗 Divulgar
-    </button>
+      <button class="btn dark" onclick="invite()">
+        🔗 Divulgar
+      </button>
 
-    ${
-      me?.is_admin
-      ?
-      `<button class="btn dark" onclick="admin()">
-        👑 ADM
-      </button>`
-      :
-      ''
-    }
+      ${
+        me?.is_admin
+          ? `
+            <button class="btn dark" onclick="admin()">
+              👑 ADM
+            </button>
+          `
+          : ''
+      }
 
-    <button class="btn dark" onclick="logout()">
-      Sair
-    </button>
+      <button class="btn dark" onclick="logout()">
+        Sair
+      </button>
 
-  </div>`;
-
+    </div>
+  `;
 }
 
 
@@ -446,125 +370,110 @@ function nav(){
    LOBBY
 ========================= */
 
-async function home(){
-
-  if(match){
-
+async function home() {
+  if (match) {
     renderGame();
-
     return;
-
   }
 
-  try{
+  try {
+    const d = await api('/api/players');
 
-    const d=await api('/api/players');
+    A.innerHTML = `
+      <div class="wrap">
 
-    A.innerHTML=`
-    <div class="wrap">
+        ${nav()}
 
-      ${nav()}
+        <div class="hero card">
 
-      <div class="hero card">
+          <div>
 
-        <div>
+            <div class="eyebrow">
+              GK • 1V1 ONLINE
+            </div>
 
-          <div class="eyebrow">
-            GK • 1V1 ONLINE
+            <h1>
+              Desafie seus amigos
+            </h1>
+
+            <p class="muted">
+              Mesa de sinuca com mira, taco,
+              potência e tacada por arrastar.
+            </p>
+
           </div>
 
-          <h1>
-            Desafie seus amigos
-          </h1>
-
-          <p class="muted">
-            Mesa de sinuca com mira, taco,
-            potência e tacada por arrastar.
-          </p>
+          <div class="balance">
+            <span>🪙</span>
+            <b>${me.chips}</b>
+            <small>fichas</small>
+          </div>
 
         </div>
 
-        <div class="balance">
+        <div class="card">
 
-          <span>🪙</span>
+          <h2>Jogadores</h2>
 
-          <b>${me.chips}</b>
+          ${
+            d.players.map(p => `
+              <div class="player-row">
 
-          <small>fichas</small>
+                <div class="player-main">
 
-        </div>
+                  <div class="avatar">
+                    ${esc((p.display_name || '?').slice(0, 1).toUpperCase())}
+                  </div>
 
-      </div>
+                  <div>
 
+                    <b>
+                      ${esc(p.display_name)}
+                    </b>
 
-      <div class="card">
+                    <div class="muted small">
+                      ${p.wins}V / ${p.losses}D
+                      • 🪙 ${p.chips}
+                    </div>
 
-        <h2>Jogadores</h2>
+                  </div>
 
-        ${
-          d.players.map(p=>`
+                </div>
 
-          <div class="player-row">
+                <div class="challenge-actions">
 
-            <div class="player-main">
+                  <input
+                    class="input stake-input"
+                    id="s${p.id}"
+                    type="number"
+                    value="10"
+                    min="10"
+                    step="10">
 
-              <div class="avatar">
-                ${esc((p.display_name||'?').slice(0,1).toUpperCase())}
-              </div>
+                  <button
+                    class="btn"
+                    onclick="challenge(${p.id})">
 
-              <div>
+                    Desafiar
 
-                <b>
-                  ${esc(p.display_name)}
-                </b>
+                  </button>
 
-                <div class="muted small">
-                  ${p.wins}V / ${p.losses}D
-                  • 🪙 ${p.chips}
                 </div>
 
               </div>
+            `).join('')
+            ||
+            '<p class="muted">Nenhum outro jogador cadastrado.</p>'
+          }
 
-            </div>
-
-
-            <div class="challenge-actions">
-
-              <input
-                class="input stake-input"
-                id="s${p.id}"
-                type="number"
-                value="10"
-                min="10"
-                step="10">
-
-              <button
-                class="btn"
-                onclick="challenge(${p.id})">
-
-                Desafiar
-
-              </button>
-
-            </div>
-
-          </div>
-
-          `).join('')
-          ||
-          '<p class="muted">Nenhum outro jogador cadastrado.</p>'
-        }
+        </div>
 
       </div>
+    `;
 
-    </div>`;
-
-  }catch(e){
-
+  } catch (e) {
     note(e.message);
-
   }
-
 }
 
 
@@ -572,59 +481,46 @@ async function home(){
    DESAFIO
 ========================= */
 
-async function challenge(id){
+async function challenge(id) {
+  try {
+    const input = document.getElementById('s' + id);
 
-  try{
+    const stake = Number(input?.value || 0);
 
-    const input=document.getElementById('s'+id);
-
-    const stake=Number(input?.value || 0);
-
-    if(!Number.isFinite(stake)||stake<10){
-
+    if (!Number.isFinite(stake) || stake < 10) {
       note('A aposta mínima é 10 fichas.');
-
       return;
-
     }
 
-    await api('/api/challenge',{
-      method:'POST',
-      body:{
-        opponent:id,
+    await api('/api/challenge', {
+      method: 'POST',
+      body: {
+        opponent: id,
         stake
       }
     });
 
     note('🎯 Desafio enviado! Aguarde a aceitação.');
 
-  }catch(e){
-
+  } catch (e) {
     note(e.message);
-
   }
-
 }
 
-
-async function showChallenge(matchId){
-
-  try{
-
-    if(challengeBox){
+async function showChallenge(matchId) {
+  try {
+    if (challengeBox) {
       challengeBox.remove();
     }
 
-    const d=await api('/api/match/'+matchId);
+    const d = await api('/api/match/' + matchId);
+    const m = d.match;
 
-    const m=d.match;
+    challengeBox = document.createElement('div');
 
-    challengeBox=document.createElement('div');
+    challengeBox.className = 'challenge-modal';
 
-    challengeBox.className='challenge-modal';
-
-    challengeBox.innerHTML=`
-
+    challengeBox.innerHTML = `
       <div class="challenge-panel">
 
         <div class="duel-icon">
@@ -652,7 +548,7 @@ async function showChallenge(matchId){
           </strong>
 
           <small>
-            Prêmio: ${m.stake*2} fichas
+            Prêmio: ${m.stake * 2} fichas
           </small>
 
         </div>
@@ -677,120 +573,95 @@ async function showChallenge(matchId){
 
         </div>
 
-      </div>`;
+      </div>
+    `;
 
     document.body.appendChild(challengeBox);
 
-    pendingChallenge=matchId;
+    pendingChallenge = matchId;
 
-  }catch(e){
-
+  } catch (e) {
     note('Não foi possível carregar o desafio.');
-
   }
-
 }
 
-
-async function acceptChallenge(id){
-
-  try{
-
+async function acceptChallenge(id) {
+  try {
     challengeBox?.remove();
+    challengeBox = null;
 
-    challengeBox=null;
-
-    await api('/api/match/'+id+'/accept',{
-      method:'POST'
+    await api('/api/match/' + id + '/accept', {
+      method: 'POST'
     });
 
-    pendingChallenge=null;
+    pendingChallenge = null;
 
     await startMatch(id);
 
     note('🎱 Partida aceita!');
 
-  }catch(e){
-
+  } catch (e) {
     note(e.message);
-
   }
-
 }
 
-
-async function rejectChallenge(id){
-
+async function rejectChallenge(id) {
   challengeBox?.remove();
 
-  challengeBox=null;
+  challengeBox = null;
+  pendingChallenge = null;
 
-  pendingChallenge=null;
-
-  try{
-
-    await api('/api/match/'+id+'/reject',{
-      method:'POST'
+  try {
+    await api('/api/match/' + id + '/reject', {
+      method: 'POST'
     });
-
-  }catch(e){}
+  } catch (e) {}
 
   note('Desafio recusado.');
-
 }
 
 
 /* =========================
-   INICIAR PARTIDA
+   PARTIDA
 ========================= */
 
-async function startMatch(id){
+async function startMatch(id) {
+  const d = await api('/api/match/' + id);
 
-  const d=await api('/api/match/'+id);
+  match = d.match;
 
-  match=d.match;
+  const s = await new Promise(resolve => {
+    let timer;
 
-  const s=await new Promise(resolve=>{
-
-    const onState=st=>{
-
-      if(st.matchId===id){
-
-        sock.off('gameState',onState);
-
+    const onState = st => {
+      if (st.matchId === id) {
+        sock.off('gameState', onState);
         clearTimeout(timer);
-
         resolve(st);
-
       }
-
     };
 
-    sock.on('gameState',onState);
+    sock.on('gameState', onState);
 
-    sock.emit('join',id);
+    sock.emit('join', id);
 
-    const timer=setTimeout(()=>{
-
-      sock.off('gameState',onState);
-
+    timer = setTimeout(() => {
+      sock.off('gameState', onState);
       resolve(null);
-
-    },1500);
-
+    }, 2500);
   });
 
-  game=s || {
-    matchId:id,
-    moving:false,
-    currentPlayer:Number(match.p1_id || 0),
-    winner:null,
-    groups:{},
-    balls:[]
+  game = s || {
+    matchId: id,
+    moving: false,
+    currentPlayer: Number(match.p1_id || 0),
+    winner: null,
+    groups: {},
+    breakShot: true,
+    balls: []
   };
 
   renderGame();
-
 }
 
 
@@ -798,129 +669,120 @@ async function startMatch(id){
    MESA
 ========================= */
 
-function renderGame(){
+function renderGame() {
+  A.innerHTML = `
+    <div class="game-wrap">
 
-  A.innerHTML=`
+      <div class="game-topbar">
 
-  <div class="game-wrap">
+        <button
+          class="btn dark mini"
+          onclick="leaveMatch()">
 
-    <div class="game-topbar">
+          ← Lobby
 
-      <button
-        class="btn dark mini"
-        onclick="leaveMatch()">
+        </button>
 
-        ← Lobby
+        <div class="duel-names">
 
-      </button>
+          <span>
+            ${esc(match?.p1 || 'Jogador 1')}
+          </span>
 
-      <div class="duel-names">
+          <b>×</b>
 
-        <span>
-          ${esc(match?.p1 || 'Jogador 1')}
-        </span>
+          <span>
+            ${esc(match?.p2 || 'Jogador 2')}
+          </span>
 
-        <b>×</b>
+        </div>
 
-        <span>
-          ${esc(match?.p2 || 'Jogador 2')}
-        </span>
-
-      </div>
-
-      <div class="stake-pill">
-        🪙 ${match?.stake || 0}
-      </div>
-
-    </div>
-
-
-    <div
-      class="turn-bar"
-      id="turnBar">
-
-      ${turnText()}
-
-    </div>
-
-
-    <div class="table-shell">
-
-      <canvas
-        id="poolCanvas"
-        width="1050"
-        height="600">
-      </canvas>
-
-      <div
-        class="touch-help"
-        id="touchHelp">
-
-        Arraste a partir da bola branca
-        para mirar e puxar a tacada
-
-      </div>
-
-    </div>
-
-
-    <div class="controls">
-
-      <div class="power-info">
-
-        <span>FORÇA</span>
-
-        <strong id="powerText">
-          0%
-        </strong>
-
-      </div>
-
-      <div class="power-track">
-
-        <div
-          class="power-fill"
-          id="powerFill">
+        <div class="stake-pill">
+          🪙 ${match?.stake || 0}
         </div>
 
       </div>
 
-      <button
-        class="btn dark"
-        onclick="resetAim()">
+      <div
+        class="turn-bar"
+        id="turnBar">
 
-        ↺ Mira
+        ${turnText()}
 
-      </button>
+      </div>
 
-      <button
-        class="btn shot-btn"
-        id="shotBtn"
-        onclick="shootNow()">
+      <div class="table-shell">
 
-        TACADA
+        <canvas
+          id="poolCanvas"
+          width="1050"
+          height="600">
+        </canvas>
 
-      </button>
+        <div
+          class="touch-help"
+          id="touchHelp">
+
+          Arraste a partir da bola branca
+          para mirar e puxar a tacada
+
+        </div>
+
+      </div>
+
+      <div class="controls">
+
+        <div class="power-info">
+
+          <span>FORÇA</span>
+
+          <strong id="powerText">
+            0%
+          </strong>
+
+        </div>
+
+        <div class="power-track">
+
+          <div
+            class="power-fill"
+            id="powerFill">
+          </div>
+
+        </div>
+
+        <button
+          class="btn dark"
+          onclick="resetAim()">
+
+          ↺ Mira
+
+        </button>
+
+        <button
+          class="btn shot-btn"
+          id="shotBtn"
+          onclick="shootNow()">
+
+          TACADA
+
+        </button>
+
+      </div>
+
+      <div class="game-tip muted">
+        ${groupsText()}
+      </div>
 
     </div>
+  `;
 
-
-    <div class="game-tip muted">
-      ${groupsText()}
-    </div>
-
-  </div>`;
-
-  canvas=document.getElementById('poolCanvas');
-
-  ctx=canvas.getContext('2d');
+  canvas = document.getElementById('poolCanvas');
+  ctx = canvas.getContext('2d');
 
   bindAimControls();
-
   resetAim();
-
   draw();
-
 }
 
 
@@ -928,13 +790,140 @@ function renderGame(){
    TEXTO DA VEZ
 ========================= */
 
-function turnText(){
-
-  if(!game){
+function turnText() {
+  if (!game) {
     return 'Carregando mesa...';
   }
 
-  if(game.winner){
+  if (game.winner) {
+    return Number(game.winner) === Number(me.id)
+      ? '🏆 Você venceu!'
+      : '💥 Você perdeu!';
+  }
 
-    return Number(game.winner)===Number(me.id)
-      ?
+  if (game.moving) {
+    return '🎱 Bolas em movimento...';
+  }
+
+  if (Number(game.currentPlayer) === Number(me.id)) {
+    return '🎯 SUA VEZ — arraste a bola branca para mirar';
+  }
+
+  return '⏳ Aguarde a vez do adversário';
+}
+
+function updateTurnBar() {
+  const el = document.getElementById('turnBar');
+
+  if (el) {
+    el.textContent = turnText();
+  }
+}
+
+function updateShotButton() {
+  const b = document.getElementById('shotBtn');
+
+  if (!b) return;
+
+  const myTurn =
+    game &&
+    Number(game.currentPlayer) === Number(me?.id) &&
+    !game.moving &&
+    !game.winner;
+
+  b.disabled = !myTurn;
+}
+
+
+/* =========================
+   GRUPOS
+========================= */
+
+function groupsText() {
+  if (!game?.groups) {
+    return 'Após definir os grupos, sua meta será limpar suas bolas e depois a bola 8.';
+  }
+
+  const p1 = game.groups.p1;
+  const p2 = game.groups.p2;
+
+  if (!p1 && !p2) {
+    return 'Grupos ainda não definidos.';
+  }
+
+  const typeText = t =>
+    t === 'solid'
+      ? 'Lisas'
+      : t === 'stripe'
+        ? 'Listradas'
+        : 'Indefinido';
+
+  const a = p1
+    ? `${esc(playerName(p1.userId))}: ${typeText(p1.type)}`
+    : '';
+
+  const b = p2
+    ? `${esc(playerName(p2.userId))}: ${typeText(p2.type)}`
+    : '';
+
+  return [a, b].filter(Boolean).join(' • ');
+}
+
+function playerName(id) {
+  if (!match) return 'Jogador';
+
+  if (Number(id) === Number(match.p1_id)) {
+    return match.p1;
+  }
+
+  if (Number(id) === Number(match.p2_id)) {
+    return match.p2;
+  }
+
+  return 'Jogador';
+}
+
+
+/* =========================
+   CANVAS / MESA
+========================= */
+
+const TABLE_W = 1.75;
+const TABLE_H = 1;
+const BALL_R = 0.0255;
+
+function worldToCanvas(x, y) {
+  if (!canvas) {
+    return { x: 0, y: 0 };
+  }
+
+  return {
+    x: x / TABLE_W * canvas.width,
+    y: y / TABLE_H * canvas.height
+  };
+}
+
+function canvasToWorld(x, y) {
+  if (!canvas) {
+    return { x: 0, y: 0 };
+  }
+
+  return {
+    x: clamp(x / canvas.width * TABLE_W, 0, TABLE_W),
+    y: clamp(y / canvas.height * TABLE_H, 0, TABLE_H)
+  };
+}
+
+function canvasToScreen(x, y) {
+  return worldToCanvas(x, y);
+}
+
+function ballScreenRadius() {
+  if (!canvas) return 14;
+
+  return BALL_R / TABLE_W * canvas.width;
+}
+
+
+/* =========================
+  
