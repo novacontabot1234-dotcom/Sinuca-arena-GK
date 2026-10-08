@@ -17,47 +17,55 @@ let pointerId = null;
 let aim = {
   active: false,
   angle: 0,
-  power: 0
+  power: 0,
+  startX: 0,
+  startY: 0,
+  currentX: 0,
+  currentY: 0
 };
 
 const TABLE_W = 1.75;
 const TABLE_H = 1;
 const BALL_R = 0.0255;
 
-const clamp = (n, a, b) =>
-  Math.max(a, Math.min(b, n));
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({
-    '&':'&amp;',
-    '<':'&lt;',
-    '>':'&gt;',
-    '"':'&quot;',
-    "'":'&#39;'
-  }[c]));
+function esc(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 async function api(url, options = {}) {
-  options.headers = {
-    ...(options.headers || {}),
-    ...(token ? { Authorization:'Bearer ' + token } : {})
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {})
   };
 
-  if (options.body) {
-    options.headers['Content-Type'] = 'application/json';
-    options.body = JSON.stringify(options.body);
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    ...options,
+    headers
+  });
 
   let data = {};
 
   try {
     data = await response.json();
-  } catch (_) {}
+  } catch (_) {
+    data = {};
+  }
 
   if (!response.ok) {
-    throw new Error(data.error || 'Erro na comunicação com o servidor.');
+    throw new Error(data.error || data.message || 'Erro na operação.');
   }
 
   return data;
@@ -67,1386 +75,1031 @@ function note(message) {
   if (!T) return;
 
   T.textContent = message;
-  T.style.display = 'block';
+  T.classList.add('show');
 
   clearTimeout(note.timer);
 
   note.timer = setTimeout(() => {
-    T.style.display = 'none';
-  }, 2800);
+    T.classList.remove('show');
+  }, 3000);
 }
 
-
 /* =========================================================
-   LOGIN
+   LOGIN / CADASTRO
 ========================================================= */
 
 function login() {
   A.innerHTML = `
-    <div class="login card">
+    <div class="card login-card">
+      <div class="login-logo">🎱</div>
 
-      <div class="brand-mark">GK</div>
+      <h1>Sinuca Arena GK</h1>
 
-      <h1>
-        Sinuca <span class="gold">Arena</span> GK
-      </h1>
-
-      <p class="muted">
-        Versão 0.3 • 1v1 online
+      <p>
+        <strong>Versão 0.3</strong><br>
+        1v1 online • Fichas • Desafios
       </p>
 
-      <div class="actions">
-        <button class="btn" onclick="loginForm()">
-          Entrar
-        </button>
-
-        <button class="btn dark" onclick="regForm()">
-          Criar conta
-        </button>
-      </div>
-
-      <div id="f"></div>
-
-    </div>
-  `;
-
-  loginForm();
-}
-
-function loginForm() {
-  const f = document.getElementById('f');
-
-  f.innerHTML = `
-    <form>
-
       <input
+        id="loginUser"
         class="input"
-        id="u"
         placeholder="Usuário"
-        autocomplete="username">
-
-      <br><br>
+        autocomplete="username"
+      >
 
       <input
+        id="loginPass"
         class="input"
-        id="p"
         type="password"
         placeholder="Senha"
-        autocomplete="current-password">
+        autocomplete="current-password"
+      >
 
-      <br><br>
-
-      <button class="btn full">
+      <button class="btn" onclick="doLogin()">
         Entrar
       </button>
 
-    </form>
+      <button class="btn secondary" onclick="registerPage()">
+        Criar conta
+      </button>
+    </div>
   `;
-
-  f.querySelector('form').onsubmit = async e => {
-    e.preventDefault();
-
-    try {
-      const d = await api('/api/login', {
-        method:'POST',
-        body:{
-          username:document.getElementById('u').value,
-          password:document.getElementById('p').value
-        }
-      });
-
-      token = d.token;
-      localStorage.token = token;
-
-      await boot();
-
-    } catch (e) {
-      note(e.message);
-    }
-  };
 }
 
-function regForm() {
-  const f = document.getElementById('f');
+function registerPage() {
+  A.innerHTML = `
+    <div class="card login-card">
+      <div class="login-logo">🎱</div>
 
-  f.innerHTML = `
-    <form>
+      <h1>Criar conta</h1>
 
-      <input
-        class="input"
-        id="n"
-        placeholder="Nome">
-
-      <br><br>
+      <p>
+        Crie seu jogador e comece a desafiar.
+      </p>
 
       <input
+        id="registerUser"
         class="input"
-        id="u"
-        placeholder="Usuário"
-        autocomplete="username">
-
-      <br><br>
+        placeholder="Escolha seu usuário"
+        autocomplete="username"
+      >
 
       <input
+        id="registerPass"
         class="input"
-        id="p"
         type="password"
-        placeholder="Senha"
-        autocomplete="new-password">
+        placeholder="Escolha sua senha"
+        autocomplete="new-password"
+      >
 
-      <br><br>
-
-      <button class="btn full">
-        Criar conta +100 fichas
+      <button class="btn" onclick="doRegister()">
+        Criar conta
       </button>
 
-    </form>
+      <button class="btn secondary" onclick="login()">
+        Voltar
+      </button>
+    </div>
   `;
-
-  f.querySelector('form').onsubmit = async e => {
-    e.preventDefault();
-
-    try {
-      const d = await api('/api/register', {
-        method:'POST',
-        body:{
-          displayName:document.getElementById('n').value,
-          username:document.getElementById('u').value,
-          password:document.getElementById('p').value
-        }
-      });
-
-      token = d.token;
-      localStorage.token = token;
-
-      await boot();
-
-    } catch (e) {
-      note(e.message);
-    }
-  };
 }
 
+async function doLogin() {
+  const username = document.getElementById('loginUser')?.value.trim();
+  const password = document.getElementById('loginPass')?.value;
+
+  if (!username || !password) {
+    note('Preencha usuário e senha.');
+    return;
+  }
+
+  try {
+    const data = await api('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        username,
+        password
+      })
+    });
+
+    token = data.token;
+
+    localStorage.token = token;
+
+    note('Login realizado.');
+
+    await boot();
+  } catch (error) {
+    note(error.message);
+  }
+}
+
+async function doRegister() {
+  const username = document.getElementById('registerUser')?.value.trim();
+  const password = document.getElementById('registerPass')?.value;
+
+  if (!username || !password) {
+    note('Preencha usuário e senha.');
+    return;
+  }
+
+  if (username.length < 3) {
+    note('O usuário precisa ter pelo menos 3 caracteres.');
+    return;
+  }
+
+  if (password.length < 4) {
+    note('A senha precisa ter pelo menos 4 caracteres.');
+    return;
+  }
+
+  try {
+    const data = await api('/api/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        username,
+        password
+      })
+    });
+
+    token = data.token;
+
+    localStorage.token = token;
+
+    note('Conta criada.');
+
+    await boot();
+  } catch (error) {
+    note(error.message);
+  }
+}
 
 /* =========================================================
    INICIALIZAÇÃO
 ========================================================= */
 
 async function boot() {
+  if (!token) {
+    login();
+    return;
+  }
+
   try {
+    const data = await api('/api/me');
 
-    me = (await api('/api/me')).user;
+    me = data.user || data;
 
-    if (!me) {
-      throw new Error('Usuário não carregado.');
-    }
-
-    if (sock) {
-      sock.disconnect();
-    }
-
-    sock = io({
-      auth:{ token }
-    });
-
-    sock.on('connect_error', err => {
-      note(err.message || 'Conexão indisponível.');
-    });
-
-    sock.on('challenge', data => {
-
-      if (Number(data.to) !== Number(me.id)) {
-        return;
-      }
-
-      showChallenge(data.matchId);
-    });
-
-    sock.on('wallet', async () => {
-
-      try {
-
-        me = (await api('/api/me')).user;
-
-        if (!match) {
-          home();
-        }
-
-      } catch (_) {}
-    });
-
-    sock.on('matchAccepted', async data => {
-
-      if (!data?.matchId) {
-        return;
-      }
-
-      if (match?.id === data.matchId) {
-        return;
-      }
-
-      try {
-        await startMatch(data.matchId);
-      } catch (e) {
-        note(e.message);
-      }
-    });
-
-    sock.on('gameState', data => {
-
-      if (!match) {
-        return;
-      }
-
-      if (data.matchId !== match.id) {
-        return;
-      }
-
-      game = data;
-
-      if (
-        !canvas ||
-        !document.getElementById('poolCanvas')
-      ) {
-        renderGame();
-      } else {
-        draw();
-      }
-    });
-
-    sock.on('turn', data => {
-
-      if (!match || !game) {
-        return;
-      }
-
-      if (data.matchId !== match.id) {
-        return;
-      }
-
-      game.currentPlayer =
-        data.currentPlayer;
-
-      game.moving = false;
-
-      aim.power = 0;
-      aim.active = false;
-
-      updateTurn();
-      updateShotButton();
-      updatePowerUI();
-      draw();
-    });
-
-    sock.on('gameOver', data => {
-
-      if (!match) {
-        return;
-      }
-
-      if (data.matchId !== match.id) {
-        return;
-      }
-
-      game.winner = data.winner;
-      game.moving = false;
-
-      draw();
-
-      if (
-        Number(data.winner) ===
-        Number(me.id)
-      ) {
-        note('🏆 Você venceu!');
-      } else {
-        note('💥 Você perdeu!');
-      }
-
-      setTimeout(() => {
-
-        match = null;
-        game = null;
-        canvas = null;
-        ctx = null;
-
-        home();
-
-      }, 4500);
-    });
+    connectSocket();
 
     home();
-
-  } catch (e) {
-
-    localStorage.removeItem('token');
+  } catch (error) {
+    console.error(error);
 
     token = null;
-    me = null;
+    localStorage.removeItem('token');
 
     login();
   }
 }
 
+function connectSocket() {
+  if (sock) {
+    try {
+      sock.disconnect();
+    } catch (_) {}
+  }
+
+  if (typeof io !== 'function') {
+    note('Socket.IO não foi carregado.');
+    return;
+  }
+
+  sock = io({
+    auth: {
+      token
+    }
+  });
+
+  sock.on('connect', () => {
+    console.log('Socket conectado.');
+  });
+
+  sock.on('connect_error', error => {
+    console.error('Socket error:', error);
+  });
+
+  sock.on('challenge', data => {
+    challengeBox = data;
+
+    note('Você recebeu um desafio.');
+
+    if (typeof challenge === 'function') {
+      challenge();
+    }
+  });
+
+  sock.on('wallet', data => {
+    if (!me) return;
+
+    if (typeof data.chips === 'number') {
+      me.chips = data.chips;
+    }
+
+    updateBalance();
+  });
+
+  sock.on('matchAccepted', data => {
+    if (!data) return;
+
+    startMatch(data.matchId || data.id);
+  });
+
+  sock.on('gameState', state => {
+    if (!match) return;
+
+    game = normalizeGameState(state);
+
+    renderGame();
+  });
+
+  sock.on('turn', data => {
+    if (!game) return;
+
+    if (data && data.playerId) {
+      game.turn = data.playerId;
+    } else if (data) {
+      game.turn = data;
+    }
+
+    updateGameUI();
+  });
+
+  sock.on('gameOver', data => {
+    if (data) {
+      game = game || {};
+
+      game.over = true;
+      game.winner = data.winner || data.winnerId;
+    }
+
+    renderGame();
+
+    note(
+      data?.winnerName
+        ? `🏆 ${data.winnerName} venceu!`
+        : '🏆 Partida encerrada.'
+    );
+  });
+}
 
 /* =========================================================
-   MENU
+   NAVEGAÇÃO
 ========================================================= */
 
 function nav() {
+  const adminButton = me?.is_admin
+    ? `<button class="nav-btn" onclick="admin()">👑 ADM</button>`
+    : '';
 
   return `
+    <div class="topbar">
+      <div class="brand">
+        🎱 <strong>Sinuca Arena GK</strong>
+      </div>
+
+      <div class="balance">
+        🪙 <span id="balance">${Number(me?.chips || 0)}</span>
+      </div>
+    </div>
+
     <div class="nav">
-
-      <button class="btn dark" onclick="home()">
-        🏠 Lobby
-      </button>
-
-      <button class="btn dark" onclick="historyPage()">
-        📜 Histórico
-      </button>
-
-      <button class="btn dark" onclick="invite()">
-        🔗 Divulgar
-      </button>
-
-      ${
-        me?.is_admin
-        ? `
-          <button
-            class="btn dark"
-            onclick="admin()">
-            👑 ADM
-          </button>
-        `
-        : ''
-      }
-
-      <button
-        class="btn dark"
-        onclick="logout()">
-        Sair
-      </button>
-
+      <button class="nav-btn" onclick="home()">🏠 Lobby</button>
+      <button class="nav-btn" onclick="historyPage()">📜 Histórico</button>
+      <button class="nav-btn" onclick="invite()">🔗 Divulgar</button>
+      ${adminButton}
+      <button class="nav-btn danger" onclick="logout()">Sair</button>
     </div>
   `;
 }
 
+function updateBalance() {
+  const el = document.getElementById('balance');
+
+  if (el) {
+    el.textContent = Number(me?.chips || 0);
+  }
+}
 
 /* =========================================================
    LOBBY
 ========================================================= */
 
 async function home() {
-
-  if (!me) {
-    login();
-    return;
-  }
-
-  if (match) {
-    renderGame();
-    return;
-  }
-
   try {
+    const data = await api('/api/players');
 
-    const data =
-      await api('/api/players');
+    const players = Array.isArray(data)
+      ? data
+      : (data.players || []);
 
     A.innerHTML = `
-      <div class="wrap">
+      ${nav()}
 
-        ${nav()}
+      <div class="card hero">
+        <h1>🎱 Desafie seus amigos</h1>
 
-        <div class="hero card">
-
-          <div>
-
-            <div class="eyebrow">
-              GK • 1V1 ONLINE
-            </div>
-
-            <h1>
-              Desafie seus amigos
-            </h1>
-
-            <p class="muted">
-              Mire, controle a força
-              e faça sua tacada.
-            </p>
-
-          </div>
-
-          <div class="balance">
-
-            <span>🪙</span>
-
-            <b>
-              ${me?.chips ?? 0}
-            </b>
-
-            <small>
-              fichas
-            </small>
-
-          </div>
-
-        </div>
-
-        <div class="card">
-
-          <h2>
-            Jogadores
-          </h2>
-
-          ${
-            data.players.length
-            ? data.players.map(player => `
-
-              <div class="player-row">
-
-                <div class="player-main">
-
-                  <div class="avatar">
-                    ${esc(
-                      (player.display_name || '?')
-                      .slice(0,1)
-                      .toUpperCase()
-                    )}
-                  </div>
-
-                  <div>
-
-                    <b>
-                      ${esc(player.display_name)}
-                    </b>
-
-                    <div class="muted small">
-                      ${player.wins}V /
-                      ${player.losses}D
-                      • 🪙 ${player.chips}
-                    </div>
-
-                  </div>
-
-                </div>
-
-                <div class="challenge-actions">
-
-                  <input
-                    class="input stake-input"
-                    id="stake-${player.id}"
-                    type="number"
-                    value="10"
-                    min="10"
-                    step="10">
-
-                  <button
-                    class="btn"
-                    onclick="challenge(${player.id})">
-                    Desafiar
-                  </button>
-
-                </div>
-
-              </div>
-
-            `).join('')
-
-            : `
-              <p class="muted">
-                Nenhum outro jogador cadastrado.
-              </p>
-            `
-          }
-
-        </div>
-
-      </div>
-    `;
-
-  } catch (e) {
-    note(e.message);
-  }
-}
-
-
-/* =========================================================
-   DESAFIOS
-========================================================= */
-
-async function challenge(opponent) {
-
-  try {
-
-    const input =
-      document.getElementById(
-        'stake-' + opponent
-      );
-
-    const stake =
-      Number(input?.value || 0);
-
-    if (
-      !Number.isFinite(stake) ||
-      stake < 10
-    ) {
-      note(
-        'A aposta mínima é 10 fichas.'
-      );
-      return;
-    }
-
-    await api('/api/challenge', {
-      method:'POST',
-      body:{
-        opponent,
-        stake
-      }
-    });
-
-    note('🎯 Desafio enviado!');
-
-  } catch (e) {
-    note(e.message);
-  }
-}
-
-async function showChallenge(matchId) {
-
-  try {
-
-    challengeBox?.remove();
-
-    const data =
-      await api('/api/match/' + matchId);
-
-    const m = data.match;
-
-    challengeBox =
-      document.createElement('div');
-
-    challengeBox.className =
-      'challenge-modal';
-
-    challengeBox.innerHTML = `
-
-      <div class="challenge-panel">
-
-        <div class="duel-icon">
-          🎱
-        </div>
-
-        <div class="eyebrow">
-          DESAFIO 1V1
-        </div>
-
-        <h2>
-          ${esc(m.p1)} te desafiou
-        </h2>
-
-        <p class="muted">
-          Prepare-se para a partida.
+        <p>
+          Aposte suas fichas, entre em partidas 1×1
+          e mostre quem manda na mesa.
         </p>
 
-        <div class="stake-card">
-
-          <span>
-            Aposta
-          </span>
-
-          <strong>
-            🪙 ${m.stake}
-          </strong>
-
-          <small>
-            Prêmio:
-            ${m.stake * 2} fichas
-          </small>
-
-        </div>
-
-        <div class="actions center">
-
-          <button
-            class="btn"
-            onclick="acceptChallenge('${matchId}')">
-            ✅ ACEITAR
+        <div class="hero-actions">
+          <button class="btn" onclick="challenge()">
+            ⚔️ Criar desafio
           </button>
 
-          <button
-            class="btn dark"
-            onclick="rejectChallenge('${matchId}')">
-            ❌ RECUSAR
+          <button class="btn secondary" onclick="invite()">
+            🔗 Divulgar jogo
           </button>
-
         </div>
+      </div>
 
+      <div class="card">
+        <h2>👥 Jogadores</h2>
+
+        <div id="players">
+          ${
+            players.length
+              ? players.map(playerCard).join('')
+              : `
+                <div class="empty">
+                  Nenhum jogador encontrado.
+                </div>
+              `
+          }
+        </div>
+      </div>
+
+      ${
+        challengeBox
+          ? `
+            <div class="card challenge-alert">
+              <h2>⚔️ Desafio recebido</h2>
+
+              <p>
+                <strong>${esc(challengeBox.fromName || challengeBox.username || 'Jogador')}</strong>
+                desafiou você.
+              </p>
+
+              <p>
+                Aposta:
+                <strong>🪙 ${Number(challengeBox.stake || 0)}</strong>
+              </p>
+
+              <div class="row">
+                <button class="btn" onclick="acceptChallenge()">
+                  Aceitar
+                </button>
+
+                <button class="btn danger" onclick="rejectChallenge()">
+                  Recusar
+                </button>
+              </div>
+            </div>
+          `
+          : ''
+      }
+    `;
+  } catch (error) {
+    A.innerHTML = `
+      ${nav()}
+
+      <div class="card">
+        <h2>Erro</h2>
+        <p>${esc(error.message)}</p>
+
+        <button class="btn" onclick="home()">
+          Tentar novamente
+        </button>
       </div>
     `;
-
-    document.body.appendChild(
-      challengeBox
-    );
-
-  } catch (e) {
-
-    note(
-      'Não foi possível carregar o desafio.'
-    );
   }
 }
 
-async function acceptChallenge(id) {
+function playerCard(player) {
+  const id = player.id || player._id || player.userId;
 
-  try {
+  if (id === me?.id || id === me?.userId) {
+    return `
+      <div class="player">
+        <div>
+          <strong>${esc(player.username || player.name || 'Você')}</strong>
+          <small>Você</small>
+        </div>
 
-    challengeBox?.remove();
-    challengeBox = null;
-
-    await api(
-      '/api/match/' + id + '/accept',
-      {
-        method:'POST'
-      }
-    );
-
-    await startMatch(id);
-
-    note('🎱 Partida aceita!');
-
-  } catch (e) {
-    note(e.message);
+        <div>
+          🪙 ${Number(player.chips ?? me?.chips ?? 0)}
+        </div>
+      </div>
+    `;
   }
-}
 
-async function rejectChallenge(id) {
+  return `
+    <div class="player">
+      <div>
+        <strong>${esc(player.username || player.name || 'Jogador')}</strong>
 
-  challengeBox?.remove();
-  challengeBox = null;
+        <small>
+          🏆 ${Number(player.wins || 0)}
+          &nbsp; • &nbsp;
+          ❌ ${Number(player.losses || 0)}
+        </small>
+      </div>
 
-  try {
-
-    await api(
-      '/api/match/' + id + '/reject',
-      {
-        method:'POST'
-      }
-    );
-
-  } catch (_) {}
-
-  note('Desafio recusado.');
-}
-
-
-/* =========================================================
-   INICIAR PARTIDA
-========================================================= */
-
-async function startMatch(id) {
-
-  const data =
-    await api('/api/match/' + id);
-
-  match = data.match;
-
-  const initialState =
-    await new Promise(resolve => {
-
-      let timer;
-
-      const receive = state => {
-
-        if (state.matchId !== id) {
-          return;
-        }
-
-        sock.off(
-          'gameState',
-          receive
-        );
-
-        clearTimeout(timer);
-
-        resolve(state);
-      };
-
-      sock.on(
-        'gameState',
-        receive
-      );
-
-      sock.emit(
-        'join',
-        id
-      );
-
-      timer = setTimeout(() => {
-
-        sock.off(
-          'gameState',
-          receive
-        );
-
-        resolve(null);
-
-      }, 3000);
-    });
-
-  game =
-    initialState || {
-      matchId:id,
-      p1:match.p1_id,
-      p2:match.p2_id,
-      currentPlayer:Number(match.p1_id),
-      moving:false,
-      winner:null,
-      groups:{},
-      breakShot:true,
-      balls:[]
-    };
-
-  renderGame();
-}
-
-
-/* =========================================================
-   INTERFACE DA PARTIDA
-========================================================= */
-
-function renderGame() {
-
-  A.innerHTML = `
-
-    <div class="game-wrap">
-
-      <div class="game-topbar">
+      <div class="player-actions">
+        <span>
+          🪙 ${Number(player.chips || 0)}
+        </span>
 
         <button
-          class="btn dark mini"
-          onclick="leaveMatch()">
-          ← Lobby
+          class="btn small"
+          onclick="challenge('${esc(id)}','${esc(player.username || player.name || '')}')"
+        >
+          Desafiar
         </button>
+      </div>
+    </div>
+  `;
+}
 
-        <div class="duel-names">
+/* =========================================================
+   DESAFIO
+========================================================= */
 
-          <span>
-            ${esc(match?.p1 || 'Jogador 1')}
-          </span>
+function challenge(playerId = '', playerName = '') {
+  A.innerHTML = `
+    ${nav()}
 
-          <b>×</b>
+    <div class="card">
+      <h2>⚔️ Criar partida</h2>
 
-          <span>
-            ${esc(match?.p2 || 'Jogador 2')}
-          </span>
+      <p>
+        Escolha o adversário e o valor da aposta.
+      </p>
 
+      ${
+        playerId
+          ? `
+            <div class="selected-player">
+              Jogador:
+              <strong>${esc(playerName)}</strong>
+            </div>
+          `
+          : ''
+      }
+
+      <label>Valor da aposta</label>
+
+      <input
+        id="stake"
+        class="input"
+        type="number"
+        min="10"
+        value="10"
+      >
+
+      ${
+        playerId
+          ? `
+            <button
+              class="btn"
+              onclick="sendChallenge('${esc(playerId)}')"
+            >
+              ⚔️ Enviar desafio
+            </button>
+          `
+          : `
+            <div class="card mini">
+              <p>
+                Volte ao lobby e escolha um jogador
+                para desafiar.
+              </p>
+            </div>
+          `
+      }
+
+      <button class="btn secondary" onclick="home()">
+        Voltar
+      </button>
+    </div>
+  `;
+}
+
+async function sendChallenge(playerId) {
+  const stake = Number(document.getElementById('stake')?.value || 0);
+
+  if (!playerId) {
+    note('Jogador inválido.');
+    return;
+  }
+
+  if (!Number.isFinite(stake) || stake < 10) {
+    note('A aposta mínima é 10 fichas.');
+    return;
+  }
+
+  if (Number(me?.chips || 0) < stake) {
+    note('Você não possui fichas suficientes.');
+    return;
+  }
+
+  try {
+    await api('/api/challenge', {
+      method: 'POST',
+      body: JSON.stringify({
+        opponentId: playerId,
+        stake
+      })
+    });
+
+    note('Desafio enviado.');
+
+    home();
+  } catch (error) {
+    note(error.message);
+  }
+}
+
+async function acceptChallenge() {
+  if (!challengeBox) {
+    note('Nenhum desafio disponível.');
+    return;
+  }
+
+  const id =
+    challengeBox.matchId ||
+    challengeBox.id ||
+    challengeBox.challengeId;
+
+  if (!id) {
+    note('Desafio inválido.');
+    return;
+  }
+
+  try {
+    await api(`/api/match/${encodeURIComponent(id)}/accept`, {
+      method: 'POST'
+    });
+
+    challengeBox = null;
+
+    await startMatch(id);
+  } catch (error) {
+    note(error.message);
+  }
+}
+
+function rejectChallenge() {
+  challengeBox = null;
+
+  note('Desafio recusado.');
+
+  home();
+}
+
+/* =========================================================
+   PARTIDA
+========================================================= */
+
+async function startMatch(matchId) {
+  if (!matchId) {
+    note('Partida inválida.');
+    return;
+  }
+
+  match = {
+    id: matchId
+  };
+
+  game = null;
+
+  renderGame();
+
+  if (sock) {
+    sock.emit('joinMatch', {
+      matchId
+    });
+  }
+
+  try {
+    const data = await api(`/api/match/${encodeURIComponent(matchId)}`);
+
+    if (data?.match) {
+      match = {
+        ...match,
+        ...data.match
+      };
+    } else if (data) {
+      match = {
+        ...match,
+        ...data
+      };
+    }
+
+    if (data?.game) {
+      game = normalizeGameState(data.game);
+    }
+
+    renderGame();
+  } catch (error) {
+    console.warn('Não foi possível carregar partida:', error.message);
+  }
+}
+
+function normalizeGameState(state) {
+  if (!state) {
+    return {
+      balls: [],
+      turn: null,
+      moving: false,
+      over: false,
+      groups: {
+        p1: null,
+        p2: null
+      }
+    };
+  }
+
+  return {
+    ...state,
+
+    balls: Array.isArray(state.balls)
+      ? state.balls
+      : [],
+
+    moving: Boolean(state.moving),
+
+    over: Boolean(state.over),
+
+    groups: state.groups || {
+      p1: null,
+      p2: null
+    }
+  };
+}
+
+function renderGame() {
+  A.innerHTML = `
+    ${nav()}
+
+    <div class="card game-card">
+      <div class="game-header">
+        <div>
+          <strong>🎱 Partida 1×1</strong>
+
+          <div id="gameInfo">
+            Carregando mesa...
+          </div>
         </div>
 
-        <div class="stake-pill">
-          🪙 ${match?.stake || 0}
-        </div>
-
+        <button class="btn danger small" onclick="leaveMatch()">
+          Sair
+        </button>
       </div>
 
-      <div
-        class="turn-bar"
-        id="turnBar">
-        ${turnText()}
-      </div>
-
-      <div class="table-shell">
-
-        <div class="table-brand">
-          <span>♛</span>
-          GK
-        </div>
-
+      <div class="table-wrap">
         <canvas
           id="poolCanvas"
           width="1050"
-          height="600">
-        </canvas>
-
-        <div class="touch-help">
-          Arraste a partir da bola branca
-          e solte para dar a tacada
-        </div>
-
+          height="600"
+        ></canvas>
       </div>
 
-      <div class="controls">
-
-        <div class="power-info">
-
-          <span>
-            FORÇA
-          </span>
-
-          <strong id="powerText">
-            0%
-          </strong>
-
-        </div>
-
-        <div class="power-track">
-
-          <div
-            class="power-fill"
-            id="powerFill">
-          </div>
-
-        </div>
-
-        <button
-          class="btn dark"
-          onclick="resetAim()">
-          ↺ Mira
-        </button>
-
-        <button
-          class="btn shot-btn"
-          id="shotBtn"
-          onclick="shootNow()">
-          TACADA
-        </button>
-
+      <div id="gameControls" class="game-controls">
+        Arraste para mirar e solte para tacar.
       </div>
-
-      <div
-        class="game-tip muted"
-        id="groupsText">
-        ${groupsText()}
-      </div>
-
     </div>
   `;
 
-  canvas =
-    document.getElementById(
-      'poolCanvas'
-    );
+  canvas = document.getElementById('poolCanvas');
 
-  ctx =
-    canvas.getContext('2d');
+  if (!canvas) return;
 
-  bindAimControls();
+  ctx = canvas.getContext('2d');
 
-  resetAim();
+  /*
+   * ESSENCIAL PARA CELULAR:
+   * impede o navegador de interpretar o arraste
+   * como rolagem da página.
+   */
+  canvas.style.touchAction = 'none';
+
+  setupPointerEvents();
 
   draw();
+  updateGameUI();
 }
 
+function updateGameUI() {
+  const info = document.getElementById('gameInfo');
+  const controls = document.getElementById('gameControls');
 
-/* =========================================================
-   TEXTO DA VEZ
-========================================================= */
-
-function turnText() {
+  if (!info || !controls) return;
 
   if (!game) {
-    return 'Carregando mesa...';
+    info.textContent = 'Aguardando os jogadores...';
+    controls.textContent = 'Aguardando a mesa...';
+    return;
   }
 
-  if (game.winner) {
+  const myId =
+    me?.id ||
+    me?.userId ||
+    me?._id;
 
-    return Number(game.winner) ===
-      Number(me.id)
+  const isMyTurn =
+    game.turn === myId ||
+    game.turn === me?.username ||
+    game.turn === me?.name;
 
-      ? '🏆 Você venceu!'
+  if (game.over) {
+    info.innerHTML = `
+      <strong>🏆 Partida encerrada</strong>
+    `;
 
-      : '💥 Você perdeu!';
+    controls.textContent = 'Partida finalizada.';
+    return;
   }
+
+  info.innerHTML = `
+    ${isMyTurn
+      ? '<strong>🟢 Sua vez</strong>'
+      : '<strong>🔴 Vez do adversário</strong>'
+    }
+  `;
 
   if (game.moving) {
-    return '🎱 Bolas em movimento...';
-  }
-
-  if (
-    Number(game.currentPlayer) ===
-    Number(me.id)
-  ) {
-    return '🎯 SUA VEZ — arraste a partir da bola branca';
-  }
-
-  return '⏳ Aguarde a vez do adversário';
-}
-
-function updateTurn() {
-
-  const element =
-    document.getElementById(
-      'turnBar'
-    );
-
-  if (element) {
-    element.textContent =
-      turnText();
+    controls.textContent = '🎱 Bolas em movimento...';
+  } else if (isMyTurn) {
+    controls.textContent =
+      '🎯 Arraste a partir da bola branca e solte para tacar.';
+  } else {
+    controls.textContent =
+      '⏳ Aguarde a jogada do adversário.';
   }
 }
 
 function canShoot() {
-
-  return !!(
-    game &&
-    me &&
-    Number(game.currentPlayer) ===
-      Number(me.id) &&
-    !game.moving &&
-    !game.winner &&
-    getCueBall()
-  );
-}
-
-function updateShotButton() {
-
-  const button =
-    document.getElementById(
-      'shotBtn'
-    );
-
-  if (!button) return;
-
-  button.disabled =
-    !canShoot();
-}
-
-
-/* =========================================================
-   GRUPOS
-========================================================= */
-
-function groupsText() {
-
-  if (!game?.groups) {
-    return 'Grupos ainda não definidos.';
+  if (!game || !me || !match) {
+    return false;
   }
 
-  const p1 =
-    game.groups.p1;
-
-  const p2 =
-    game.groups.p2;
-
-  if (!p1 && !p2) {
-    return 'Grupos ainda não definidos.';
+  if (game.over) {
+    return false;
   }
 
-  function typeName(type) {
-
-    if (type === 'solid') {
-      return 'Lisas';
-    }
-
-    if (type === 'stripe') {
-      return 'Listradas';
-    }
-
-    return 'Indefinido';
+  if (game.moving) {
+    return false;
   }
 
-  const result = [];
-
-  if (p1) {
-    result.push(
-      `${esc(playerName(p1.userId))}: ${typeName(p1.type)}`
-    );
-  }
-
-  if (p2) {
-    result.push(
-      `${esc(playerName(p2.userId))}: ${typeName(p2.type)}`
-    );
-  }
-
-  return result.join(' • ');
-}
-
-function playerName(id) {
-
-  if (!match) {
-    return 'Jogador';
-  }
-
-  if (
-    Number(id) ===
-    Number(match.p1_id)
-  ) {
-    return match.p1;
-  }
-
-  if (
-    Number(id) ===
-    Number(match.p2_id)
-  ) {
-    return match.p2;
-  }
-
-  return 'Jogador';
-}
-
-
-/* =========================================================
-   COORDENADAS
-========================================================= */
-
-function worldToCanvas(x, y) {
-
-  if (!canvas) {
-    return {x:0,y:0};
-  }
-
-  return {
-    x:
-      (x / TABLE_W) *
-      canvas.width,
-
-    y:
-      (y / TABLE_H) *
-      canvas.height
-  };
-}
-
-function canvasToWorld(x, y) {
-
-  if (!canvas) {
-    return {x:0,y:0};
-  }
-
-  return {
-
-    x:clamp(
-      (x / canvas.width) *
-        TABLE_W,
-      0,
-      TABLE_W
-    ),
-
-    y:clamp(
-      (y / canvas.height) *
-        TABLE_H,
-      0,
-      TABLE_H
-    )
-  };
-}
-
-function ballRadius() {
-
-  if (!canvas) {
-    return 20;
-  }
+  const myId =
+    me.id ||
+    me.userId ||
+    me._id;
 
   return (
-    BALL_R /
-    TABLE_W *
-    canvas.width
+    game.turn === myId ||
+    game.turn === me.username ||
+    game.turn === me.name
   );
 }
 
-
 /* =========================================================
-   BOLA BRANCA
+   CONTROLES DE MIRA
 ========================================================= */
 
-function getCueBall() {
+function setupPointerEvents() {
+  if (!canvas) return;
 
-  if (!game?.balls) {
-    return null;
-  }
+  canvas.onpointerdown = event => {
+    if (!canShoot()) {
+      return;
+    }
 
-  return game.balls.find(
-    b =>
-      Number(b.id) === 0 &&
-      !b.pocketed
-  ) || null;
-}
+    event.preventDefault();
 
-function getPointerPosition(event) {
+    pointerDown = true;
+    pointerId = event.pointerId;
 
-  const rect =
-    canvas.getBoundingClientRect();
+    try {
+      canvas.setPointerCapture(pointerId);
+    } catch (_) {}
 
-  return {
-    x:
-      (event.clientX - rect.left) *
-      (canvas.width / rect.width),
+    const pos = pointerPosition(event);
 
-    y:
-      (event.clientY - rect.top) *
-      (canvas.height / rect.height)
+    aim.active = true;
+    aim.startX = pos.x;
+    aim.startY = pos.y;
+    aim.currentX = pos.x;
+    aim.currentY = pos.y;
+    aim.power = 0;
+
+    updateAim(event);
+
+    draw();
+  };
+
+  canvas.onpointermove = event => {
+    if (!pointerDown) {
+      return;
+    }
+
+    if (
+      pointerId !== null &&
+      event.pointerId !== pointerId
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+
+    updateAim(event);
+    draw();
+  };
+
+  canvas.onpointerup = event => {
+    if (!pointerDown) {
+      return;
+    }
+
+    if (
+      pointerId !== null &&
+      event.pointerId !== pointerId
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+
+    /*
+     * Atualiza a posição final ANTES de disparar.
+     * Isso corrige o problema de soltar o dedo/mouse
+     * sem registrar corretamente a força.
+     */
+    updateAim(event);
+
+    pointerDown = false;
+
+    try {
+      canvas.releasePointerCapture(pointerId);
+    } catch (_) {}
+
+    pointerId = null;
+
+    /*
+     * A tacada acontece aqui.
+     */
+    if (aim.power >= 0.08 && canShoot()) {
+      shootNow();
+    } else {
+      resetAim();
+      draw();
+    }
+  };
+
+  canvas.onpointercancel = event => {
+    pointerDown = false;
+    pointerId = null;
+
+    resetAim();
+    draw();
+  };
+
+  canvas.onpointerleave = event => {
+    /*
+     * NÃO cancela a mira aqui.
+     *
+     * No celular e no mouse o ponteiro pode sair
+     * visualmente da mesa durante o arraste.
+     */
+  };
+
+  canvas.oncontextmenu = event => {
+    event.preventDefault();
   };
 }
 
+function pointerPosition(event) {
+  const rect = canvas.getBoundingClientRect();
 
-/* =========================================================
-   MIRA / FORÇA
-========================================================= */
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * TABLE_W,
+    y: ((event.clientY - rect.top) / rect.height) * TABLE_H
+  };
+}
 
 function updateAim(event) {
-
   if (!canvas || !game) {
     return;
   }
 
-  const cue =
-    getCueBall();
+  const cueBall = getCueBall();
 
-  if (!cue) {
+  if (!cueBall) {
     return;
   }
 
-  const point =
-    getPointerPosition(event);
+  const pos = pointerPosition(event);
 
-  const c =
-    worldToCanvas(
-      cue.x,
-      cue.y
-    );
-
-  const dx =
-    point.x - c.x;
-
-  const dy =
-    point.y - c.y;
+  aim.currentX = pos.x;
+  aim.currentY = pos.y;
 
   /*
-    A direção da tacada é
-    oposta à direção do arraste.
-  */
+   * A direção é da posição atual do dedo/mouse
+   * para a bola branca.
+   *
+   * Isso faz o sistema funcionar como um estilingue:
+   * arrasta para trás -> solta -> bola vai para frente.
+   */
+  const dx = cueBall.x - pos.x;
+  const dy = cueBall.y - pos.y;
 
-  aim.angle =
-    Math.atan2(
-      c.y - point.y,
-      c.x - point.x
-    );
+  aim.angle = Math.atan2(dy, dx);
 
-  const distance =
-    Math.sqrt(
-      dx * dx +
-      dy * dy
-    );
+  const distance = Math.sqrt(
+    Math.pow(cueBall.x - pos.x, 2) +
+    Math.pow(cueBall.y - pos.y, 2)
+  );
 
-  aim.power =
-    clamp(
-      distance / 280,
-      0.08,
-      1
-    );
+  /*
+   * Limita a força máxima.
+   */
+  aim.power = clamp(
+    distance / 0.55,
+    0,
+    1
+  );
 
   aim.active = true;
-
-  updatePowerUI();
 }
 
 function resetAim() {
-
   aim.active = false;
   aim.power = 0;
-
-  const cue =
-    getCueBall();
-
-  if (cue) {
-
-    /*
-      Mira inicial para a direita.
-    */
-
-    aim.angle = 0;
-  }
-
-  updatePowerUI();
-  draw();
 }
 
-function updatePowerUI() {
-
-  const text =
-    document.getElementById(
-      'powerText'
-    );
-
-  const fill =
-    document.getElementById(
-      'powerFill'
-    );
-
-  const percent =
-    Math.round(
-      aim.power * 100
-    );
-
-  if (text) {
-    text.textContent =
-      percent + '%';
+function getCueBall() {
+  if (!game?.balls) {
+    return null;
   }
 
-  if (fill) {
-    fill.style.width =
-      percent + '%';
-  }
+  return (
+    game.balls.find(ball =>
+      Number(ball.id) === 0 ||
+      ball.id === '0' ||
+      ball.number === 0
+    ) || null
+  );
 }
-
-
-/* =========================================================
-   CONTROLES DE TOQUE / MOUSE
-========================================================= */
-
-function bindAimControls() {
-
-  if (!canvas) {
-    return;
-  }
-
-  canvas.onpointerdown =
-    event => {
-
-      if (!canShoot()) {
-        return;
-      }
-
-      pointerDown = true;
-      pointerId = event.pointerId;
-
-      canvas.setPointerCapture?.(
-        event.pointerId
-      );
-
-      updateAim(event);
-
-      draw();
-
-      event.preventDefault?.();
-    };
-
-  canvas.onpointermove =
-    event => {
-
-      if (!pointerDown) {
-        return;
-      }
-
-      if (
-        pointerId !== null &&
-        event.pointerId !== pointerId
-      ) {
-        return;
-      }
-
-      updateAim(event);
-
-      draw();
-
-      event.preventDefault?.();
-    };
-
-  canvas.onpointerup =
-    event => {
-
-      if (!pointerDown) {
-        return;
-      }
-
-      pointerDown = false;
-
-      if (
-        pointerId !== null &&
-        event.pointerId !== pointerId
-      ) {
-        pointerId = null;
-        return;
-      }
-
-      pointerId = null;
-
-      updateAim(event);
-
-      draw();
-
-      event.preventDefault?.();
-
-      /*
-        AQUI ESTÁ A CORREÇÃO PRINCIPAL:
-        ao soltar, a tacada é enviada.
-      */
-
-      if (aim.power >= 0.08) {
-        shootNow();
-      }
-    };
-
-  canvas.onpointercancel =
-    () => {
-
-      pointerDown = false;
-      pointerId = null;
-    };
-
-  canvas.oncontextmenu =
-    event => {
-      event.preventDefault();
-    };
-}
-
-
-/* =========================================================
-   TACADA
-========================================================= */
 
 function shootNow() {
-
   if (!canShoot()) {
+    resetAim();
     return;
   }
 
   if (!sock) {
-    note('Sem conexão com a partida.');
+    note('Conexão com o servidor perdida.');
     return;
   }
 
-  const power =
-    clamp(
-      aim.power,
-      0.08,
-      1
-    );
+  const power = clamp(aim.power, 0.08, 1);
 
-  const angle =
-    Number.isFinite(aim.angle)
-      ? aim.angle
-      : 0;
+  const shot = {
+    matchId: match.id,
+    angle: aim.angle,
+    power
+  };
 
+  /*
+   * Marca localmente como em movimento imediatamente.
+   * Evita que dois disparos sejam enviados rapidamente.
+   */
   game.moving = true;
 
-  updateShotButton();
-  updateTurn();
+  sock.emit('shot', shot);
 
-  sock.emit(
-    'shot',
-    {
-      matchId:match.id,
-      angle,
-      power
-    }
-  );
+  resetAim();
 
-  aim.power = 0;
-  aim.active = false;
-
-  updatePowerUI();
+  updateGameUI();
   draw();
 }
 
-
 /* =========================================================
-   DESENHO PRINCIPAL
+   DESENHO DA MESA
 ========================================================= */
 
 function draw() {
-
-  if (!canvas || !ctx || !game) {
+  if (!canvas || !ctx) {
     return;
   }
 
@@ -1459,191 +1112,35 @@ function draw() {
 
   drawTable();
 
-  if (Array.isArray(game.balls)) {
-
-    game.balls.forEach(ball => {
-
-      if (!ball.pocketed) {
-        drawBall(ball);
-      }
-
-    });
+  if (game?.balls) {
+    for (const ball of game.balls) {
+      drawBall(ball);
+    }
   }
 
   drawAim();
 
-  updateTurn();
-  updateShotButton();
-  updatePowerUI();
-
-  const groupElement =
-    document.getElementById(
-      'groupsText'
-    );
-
-  if (groupElement) {
-    groupElement.innerHTML =
-      groupsText();
-  }
+  updateGameUI();
 }
-/* =========================================================
-   MESA PREMIUM GK
-========================================================= */
-
-function roundRect(ctx, x, y, width, height, radius) {
-
-  const r = Math.min(
-    radius,
-    width / 2,
-    height / 2
-  );
-
-  ctx.beginPath();
-
-  ctx.moveTo(x + r, y);
-
-  ctx.arcTo(
-    x + width,
-    y,
-    x + width,
-    y + height,
-    r
-  );
-
-  ctx.arcTo(
-    x + width,
-    y + height,
-    x,
-    y + height,
-    r
-  );
-
-  ctx.arcTo(
-    x,
-    y + height,
-    x,
-    y,
-    r
-  );
-
-  ctx.arcTo(
-    x,
-    y,
-    x + width,
-    y,
-    r
-  );
-
-  ctx.closePath();
-}
-
 
 function drawTable() {
-
   const w = canvas.width;
   const h = canvas.height;
 
-  const pad = 34;
-
-  /*
-    SOMBRA DA MESA
-  */
-
-  ctx.save();
-
-  ctx.shadowColor =
-    'rgba(0,0,0,.75)';
-
-  ctx.shadowBlur = 35;
-  ctx.shadowOffsetY = 20;
-
-  const wood =
-    ctx.createLinearGradient(
-      0,
-      0,
-      w,
-      h
-    );
-
-  wood.addColorStop(
+  const wood = ctx.createLinearGradient(
     0,
-    '#5a351d'
+    0,
+    0,
+    h
   );
 
-  wood.addColorStop(
-    .25,
-    '#a36a32'
-  );
-
-  wood.addColorStop(
-    .5,
-    '#4b2b18'
-  );
-
-  wood.addColorStop(
-    .75,
-    '#8a5529'
-  );
-
-  wood.addColorStop(
-    1,
-    '#24140b'
-  );
+  wood.addColorStop(0, '#3b2412');
+  wood.addColorStop(0.3, '#8b5a2b');
+  wood.addColorStop(0.5, '#c08a42');
+  wood.addColorStop(0.7, '#70431d');
+  wood.addColorStop(1, '#2c190c');
 
   ctx.fillStyle = wood;
-
-  roundRect(
-    ctx,
-    0,
-    0,
-    w,
-    h,
-    30
-  );
-
-  ctx.fill();
-
-  ctx.restore();
-
-
-  /*
-    BORDA DOURADA
-  */
-
-  const gold =
-    ctx.createLinearGradient(
-      0,
-      0,
-      w,
-      0
-    );
-
-  gold.addColorStop(
-    0,
-    '#6d4b1d'
-  );
-
-  gold.addColorStop(
-    .2,
-    '#d6b45f'
-  );
-
-  gold.addColorStop(
-    .5,
-    '#fff0ae'
-  );
-
-  gold.addColorStop(
-    .8,
-    '#c99e43'
-  );
-
-  gold.addColorStop(
-    1,
-    '#5a3d17'
-  );
-
-  ctx.fillStyle = gold;
 
   roundRect(
     ctx,
@@ -1651,347 +1148,183 @@ function drawTable() {
     10,
     w - 20,
     h - 20,
-    25
+    30
   );
 
   ctx.fill();
 
-
-  /*
-    BORDA ESCURA INTERNA
-  */
-
-  ctx.fillStyle =
-    '#321d10';
+  ctx.strokeStyle = '#d6b668';
+  ctx.lineWidth = 5;
 
   roundRect(
     ctx,
-    21,
-    21,
-    w - 42,
-    h - 42,
-    21
+    12,
+    12,
+    w - 24,
+    h - 24,
+    30
   );
 
-  ctx.fill();
+  ctx.stroke();
 
+  const marginX = w * 0.055;
+  const marginY = h * 0.09;
 
-  /*
-    PANO VERDE
-  */
+  const clothX = marginX;
+  const clothY = marginY;
+  const clothW = w - marginX * 2;
+  const clothH = h - marginY * 2;
 
-  const cloth =
-    ctx.createLinearGradient(
-      0,
-      pad,
-      0,
-      h - pad
-    );
-
-  cloth.addColorStop(
-    0,
-    '#12845c'
+  const cloth = ctx.createRadialGradient(
+    w / 2,
+    h / 2,
+    20,
+    w / 2,
+    h / 2,
+    w
   );
 
-  cloth.addColorStop(
-    .25,
-    '#0b7953'
-  );
-
-  cloth.addColorStop(
-    .55,
-    '#086b49'
-  );
-
-  cloth.addColorStop(
-    .8,
-    '#075d40'
-  );
-
-  cloth.addColorStop(
-    1,
-    '#06472f'
-  );
+  cloth.addColorStop(0, '#11643c');
+  cloth.addColorStop(0.55, '#0c5433');
+  cloth.addColorStop(1, '#063322');
 
   ctx.fillStyle = cloth;
 
   roundRect(
     ctx,
-    pad,
-    pad,
-    w - pad * 2,
-    h - pad * 2,
-    17
+    clothX,
+    clothY,
+    clothW,
+    clothH,
+    18
   );
 
   ctx.fill();
 
+  ctx.strokeStyle = '#1b130a';
+  ctx.lineWidth = 7;
+
+  roundRect(
+    ctx,
+    clothX,
+    clothY,
+    clothW,
+    clothH,
+    18
+  );
+
+  ctx.stroke();
 
   /*
-    BRILHO DO PANO
-  */
-
-  const shine =
-    ctx.createLinearGradient(
-      0,
-      pad,
-      0,
-      h / 2
-    );
-
-  shine.addColorStop(
+   * Brilho do pano.
+   */
+  const shine = ctx.createLinearGradient(
     0,
-    'rgba(255,255,255,.13)'
+    clothY,
+    0,
+    clothY + clothH
   );
 
-  shine.addColorStop(
-    .35,
-    'rgba(255,255,255,.025)'
-  );
-
-  shine.addColorStop(
-    1,
-    'rgba(0,0,0,.12)'
-  );
+  shine.addColorStop(0, 'rgba(255,255,255,0.07)');
+  shine.addColorStop(0.4, 'rgba(255,255,255,0)');
+  shine.addColorStop(1, 'rgba(0,0,0,0.08)');
 
   ctx.fillStyle = shine;
 
   roundRect(
     ctx,
-    pad,
-    pad,
-    w - pad * 2,
-    h - pad * 2,
-    17
+    clothX + 5,
+    clothY + 5,
+    clothW - 10,
+    clothH - 10,
+    15
   );
 
   ctx.fill();
 
-
   /*
-    TEXTURA DO PANO
-  */
-
-  ctx.save();
-
-  ctx.globalAlpha = .055;
-
-  ctx.strokeStyle =
-    '#ffffff';
-
-  ctx.lineWidth = 1;
-
-  for (
-    let x = pad;
-    x < w - pad;
-    x += 14
-  ) {
-
-    ctx.beginPath();
-
-    ctx.moveTo(
-      x,
-      pad
-    );
-
-    ctx.lineTo(
-      x,
-      h - pad
-    );
-
-    ctx.stroke();
-  }
-
-  for (
-    let y = pad;
-    y < h - pad;
-    y += 14
-  ) {
-
-    ctx.beginPath();
-
-    ctx.moveTo(
-      pad,
-      y
-    );
-
-    ctx.lineTo(
-      w - pad,
-      y
-    );
-
-    ctx.stroke();
-  }
-
-  ctx.restore();
-
-
-  /*
-    LOGO GK NA MESA
-  */
-
-  ctx.save();
-
-  ctx.globalAlpha = .14;
-
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-
-  ctx.fillStyle =
-    '#e0c77c';
-
-  ctx.font =
-    '900 94px Arial';
-
-  ctx.fillText(
-    'GK',
-    w / 2,
-    h / 2 - 18
-  );
-
-  ctx.font =
-    'bold 17px Arial';
-
-  ctx.fillText(
-    'SINuca ARENA',
-    w / 2,
-    h / 2 + 48
-  );
-
-  ctx.restore();
-
-
-  /*
-    LINHA CENTRAL
-  */
-
-  ctx.save();
-
-  ctx.strokeStyle =
-    'rgba(255,255,255,.16)';
-
+   * Linha central.
+   */
+  ctx.strokeStyle = 'rgba(255,255,255,0.13)';
   ctx.lineWidth = 2;
 
   ctx.beginPath();
 
   ctx.moveTo(
-    w / 2,
-    pad
+    clothX + clothW / 2,
+    clothY + 10
   );
 
   ctx.lineTo(
-    w / 2,
-    h - pad
+    clothX + clothW / 2,
+    clothY + clothH - 10
   );
 
   ctx.stroke();
 
-  ctx.restore();
-
-
   /*
-    MARCA DE SAÍDA
-  */
-
-  ctx.save();
-
-  ctx.strokeStyle =
-    'rgba(255,255,255,.28)';
-
-  ctx.lineWidth = 2;
-
+   * Marca de saída.
+   */
   ctx.beginPath();
 
   ctx.arc(
-    w * .25,
-    h / 2,
-    42,
-    -Math.PI / 2,
-    Math.PI / 2
+    clothX + clothW * 0.25,
+    clothY + clothH / 2,
+    4,
+    0,
+    Math.PI * 2
   );
 
-  ctx.stroke();
-
-  ctx.restore();
-
+  ctx.fillStyle = '#d6b668';
+  ctx.fill();
 
   /*
-    PEQUENAS MARCAÇÕES DA TABELA
-  */
+   * Marcadores superiores e inferiores.
+   */
+  for (let i = 1; i < 7; i++) {
+    const x =
+      clothX +
+      (clothW / 7) * i;
 
+    drawMarker(x, clothY - 16);
+    drawMarker(x, clothY + clothH + 16);
+  }
+
+  /*
+   * Logo GK.
+   */
   ctx.save();
 
-  ctx.fillStyle =
-    'rgba(235,210,145,.8)';
+  ctx.fillStyle = 'rgba(214,182,104,0.22)';
+  ctx.font = 'bold 48px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
 
-  const markerSize = 5;
-
-  const markers = [
-    [.18, .03],
-    [.36, .03],
-    [.50, .03],
-    [.64, .03],
-    [.82, .03],
-
-    [.18, .97],
-    [.36, .97],
-    [.50, .97],
-    [.64, .97],
-    [.82, .97]
-  ];
-
-  markers.forEach(m => {
-
-    ctx.beginPath();
-
-    ctx.arc(
-      w * m[0],
-      h * m[1],
-      markerSize,
-      0,
-      Math.PI * 2
-    );
-
-    ctx.fill();
-  });
+  ctx.fillText(
+    'GK',
+    clothX + clothW / 2,
+    clothY + clothH / 2
+  );
 
   ctx.restore();
 
-
   /*
-    6 CAÇAPAS
-  */
-
-  const pockets = getPocketPositions();
-
-  pockets.forEach(p => {
-
-    const radius =
-      Math.min(
-        w,
-        h
-      ) * .047;
-
-    /*
-      sombra
-    */
-
+   * Caçapas.
+   */
+  for (const pocket of getPocketPositions()) {
     ctx.save();
 
-    ctx.shadowColor =
-      'rgba(0,0,0,.9)';
-
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
     ctx.shadowBlur = 12;
 
-    ctx.fillStyle =
-      '#020403';
+    ctx.fillStyle = '#030303';
 
     ctx.beginPath();
 
     ctx.arc(
-      p.x,
-      p.y,
-      radius,
+      pocket.x,
+      pocket.y,
+      pocket.r,
       0,
       Math.PI * 2
     );
@@ -2000,138 +1333,142 @@ function drawTable() {
 
     ctx.restore();
 
-
-    /*
-      aro da caçapa
-    */
-
-    ctx.strokeStyle =
-      'rgba(230,205,137,.5)';
-
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#171717';
+    ctx.lineWidth = 3;
 
     ctx.beginPath();
 
     ctx.arc(
-      p.x,
-      p.y,
-      radius + 3,
+      pocket.x,
+      pocket.y,
+      pocket.r,
       0,
       Math.PI * 2
     );
 
     ctx.stroke();
-  });
+  }
 }
 
+function drawMarker(x, y) {
+  ctx.fillStyle = '#d6b668';
+
+  ctx.beginPath();
+
+  ctx.arc(
+    x,
+    y,
+    3,
+    0,
+    Math.PI * 2
+  );
+
+  ctx.fill();
+}
 
 function getPocketPositions() {
-
-  if (!canvas) {
-    return [];
-  }
-
   const w = canvas.width;
   const h = canvas.height;
 
+  const marginX = w * 0.055;
+  const marginY = h * 0.09;
+
+  const clothX = marginX;
+  const clothY = marginY;
+  const clothW = w - marginX * 2;
+  const clothH = h - marginY * 2;
+
+  const r = Math.min(w, h) * 0.042;
+
   return [
     {
-      x:34,
-      y:34
+      x: clothX,
+      y: clothY,
+      r
     },
-
     {
-      x:w / 2,
-      y:30
+      x: clothX + clothW / 2,
+      y: clothY - 1,
+      r
     },
-
     {
-      x:w - 34,
-      y:34
+      x: clothX + clothW,
+      y: clothY,
+      r
     },
-
     {
-      x:34,
-      y:h - 34
+      x: clothX,
+      y: clothY + clothH,
+      r
     },
-
     {
-      x:w / 2,
-      y:h - 30
+      x: clothX + clothW / 2,
+      y: clothY + clothH + 1,
+      r
     },
-
     {
-      x:w - 34,
-      y:h - 34
+      x: clothX + clothW,
+      y: clothY + clothH,
+      r
     }
   ];
 }
 
-
 /* =========================================================
-   BOLAS 3D
+   BOLAS
 ========================================================= */
 
 const BALL_COLORS = {
-  0:'#f4f4f1',
-  1:'#f3c400',
-  2:'#174aa8',
-  3:'#d91d22',
-  4:'#6e2a91',
-  5:'#ef6d18',
-  6:'#168447',
-  7:'#8d171d',
-  8:'#111111',
-  9:'#e6bd16',
-  10:'#2454a7',
-  11:'#d52c32',
-  12:'#71328e',
-  13:'#e96f1c',
-  14:'#23864b',
-  15:'#8d2023'
+  0: '#ffffff',
+  1: '#f4c542',
+  2: '#154c9c',
+  3: '#c92828',
+  4: '#6f299f',
+  5: '#ed6c25',
+  6: '#198b48',
+  7: '#171717',
+  8: '#050505',
+  9: '#f4c542',
+  10: '#154c9c',
+  11: '#c92828',
+  12: '#6f299f',
+  13: '#ed6c25',
+  14: '#198b48',
+  15: '#171717'
 };
 
-
 function drawBall(ball) {
-
-  if (!canvas || !ctx) {
+  if (
+    typeof ball.x !== 'number' ||
+    typeof ball.y !== 'number'
+  ) {
     return;
   }
 
-  const p =
-    worldToCanvas(
-      Number(ball.x) || 0,
-      Number(ball.y) || 0
-    );
+  const x = ball.x / TABLE_W * canvas.width;
+  const y = ball.y / TABLE_H * canvas.height;
 
-  const r =
-    ballRadius();
+  const radius =
+    BALL_R / TABLE_W * canvas.width;
 
-  const number =
-    Number(ball.id) || 0;
-
-  const base =
-    BALL_COLORS[number] ||
-    '#dddddd';
+  const id =
+    Number(ball.id ?? ball.number ?? 0);
 
   /*
-    SOMBRA
-  */
-
+   * Sombra.
+   */
   ctx.save();
 
-  ctx.globalAlpha = .35;
-
-  ctx.fillStyle =
-    '#000';
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = '#000';
 
   ctx.beginPath();
 
   ctx.ellipse(
-    p.x + r * .22,
-    p.y + r * .45,
-    r * .92,
-    r * .48,
+    x + radius * 0.35,
+    y + radius * 0.45,
+    radius * 0.95,
+    radius * 0.5,
     0,
     0,
     Math.PI * 2
@@ -2141,173 +1478,153 @@ function drawBall(ball) {
 
   ctx.restore();
 
-
   /*
-    GRADIENTE DA BOLA
-  */
+   * Bola.
+   */
+  const baseColor =
+    BALL_COLORS[id] || '#ffffff';
 
-  const gradient =
-    ctx.createRadialGradient(
-      p.x - r * .35,
-      p.y - r * .4,
-      r * .12,
-      p.x,
-      p.y,
-      r
-    );
-
-  gradient.addColorStop(
-    0,
-    '#ffffff'
+  const gradient = ctx.createRadialGradient(
+    x - radius * 0.35,
+    y - radius * 0.4,
+    radius * 0.05,
+    x,
+    y,
+    radius
   );
 
-  gradient.addColorStop(
-    .18,
-    base
-  );
+  gradient.addColorStop(0, '#ffffff');
+  gradient.addColorStop(0.16, baseColor);
+  gradient.addColorStop(0.72, baseColor);
+  gradient.addColorStop(1, '#020202');
 
-  gradient.addColorStop(
-    .72,
-    base
-  );
-
-  gradient.addColorStop(
-    1,
-    '#050505'
-  );
-
-  ctx.fillStyle =
-    gradient;
+  ctx.fillStyle = gradient;
 
   ctx.beginPath();
 
   ctx.arc(
-    p.x,
-    p.y,
-    r,
+    x,
+    y,
+    radius,
     0,
     Math.PI * 2
   );
 
   ctx.fill();
 
-
   /*
-    LISTRAS
-  */
-
-  if (
-    number >= 9 &&
-    number <= 15
-  ) {
-
+   * Listradas.
+   */
+  if (id >= 9 && id <= 15) {
     ctx.save();
 
     ctx.beginPath();
 
     ctx.arc(
-      p.x,
-      p.y,
-      r,
+      x,
+      y,
+      radius,
       0,
       Math.PI * 2
     );
 
     ctx.clip();
 
-    ctx.fillStyle =
-      'rgba(255,255,255,.9)';
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
 
     ctx.fillRect(
-      p.x - r,
-      p.y - r * .28,
-      r * 2,
-      r * .56
+      x - radius,
+      y - radius * 0.32,
+      radius * 2,
+      radius * 0.64
     );
 
     ctx.restore();
   }
 
-
   /*
-    NÚMERO BRANCO
-  */
-
-  if (number !== 0) {
-
-    ctx.fillStyle =
-      '#f7f7f5';
+   * Número.
+   */
+  if (id !== 0) {
+    ctx.fillStyle = '#fff';
 
     ctx.beginPath();
 
     ctx.arc(
-      p.x,
-      p.y,
-      r * .43,
+      x,
+      y,
+      radius * 0.38,
       0,
       Math.PI * 2
     );
 
     ctx.fill();
 
-    ctx.fillStyle =
-      '#111';
-
-    ctx.textAlign =
-      'center';
-
-    ctx.textBaseline =
-      'middle';
+    ctx.fillStyle = '#111';
 
     ctx.font =
-      `900 ${Math.max(
-        9,
-        r * .65
-      )}px Arial`;
+      `bold ${Math.max(9, radius * 0.72)}px Arial`;
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
 
     ctx.fillText(
-      number,
-      p.x,
-      p.y + .5
+      String(id),
+      x,
+      y + 1
     );
   }
 
-
   /*
-    BRILHO
-  */
+   * Brilho.
+   */
+  const shine = ctx.createRadialGradient(
+    x - radius * 0.35,
+    y - radius * 0.42,
+    0,
+    x - radius * 0.35,
+    y - radius * 0.42,
+    radius * 0.65
+  );
 
-  ctx.fillStyle =
-    'rgba(255,255,255,.7)';
+  shine.addColorStop(
+    0,
+    'rgba(255,255,255,0.8)'
+  );
+
+  shine.addColorStop(
+    0.25,
+    'rgba(255,255,255,0.15)'
+  );
+
+  shine.addColorStop(
+    1,
+    'rgba(255,255,255,0)'
+  );
+
+  ctx.fillStyle = shine;
 
   ctx.beginPath();
 
   ctx.arc(
-    p.x - r * .34,
-    p.y - r * .38,
-    r * .13,
+    x,
+    y,
+    radius,
     0,
     Math.PI * 2
   );
 
   ctx.fill();
 
-
-  /*
-    CONTORNO
-  */
-
-  ctx.strokeStyle =
-    'rgba(0,0,0,.55)';
-
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1;
 
   ctx.beginPath();
 
   ctx.arc(
-    p.x,
-    p.y,
-    r,
+    x,
+    y,
+    radius,
     0,
     Math.PI * 2
   );
@@ -2315,794 +1632,667 @@ function drawBall(ball) {
   ctx.stroke();
 }
 
-
 /* =========================================================
-   MIRA + LINHA DE TRAJETÓRIA
+   MIRA + TACO
 ========================================================= */
 
 function drawAim() {
-
-  if (!canShoot()) {
+  if (!aim.active || !canShoot()) {
     return;
   }
 
-  const cue =
-    getCueBall();
+  const cueBall = getCueBall();
 
-  if (!cue) {
+  if (!cueBall) {
     return;
   }
 
-  const start =
-    worldToCanvas(
-      cue.x,
-      cue.y
-    );
+  const x =
+    cueBall.x / TABLE_W * canvas.width;
 
-  const angle =
-    aim.angle || 0;
+  const y =
+    cueBall.y / TABLE_H * canvas.height;
 
   const maxLength =
-    Math.max(
-      canvas.width,
-      canvas.height
-    );
+    250 + aim.power * 260;
+
+  const endX =
+    x + Math.cos(aim.angle) * maxLength;
+
+  const endY =
+    y + Math.sin(aim.angle) * maxLength;
 
   /*
-    LINHA DE MIRA
-  */
-
+   * Linha de mira.
+   */
   ctx.save();
 
-  ctx.setLineDash([
-    12,
-    10
-  ]);
+  ctx.setLineDash([10, 8]);
 
   ctx.strokeStyle =
-    aim.active
-      ? 'rgba(255,245,190,.95)'
-      : 'rgba(255,255,255,.5)';
+    'rgba(255,255,255,0.75)';
 
-  ctx.lineWidth =
-    aim.active
-      ? 3
-      : 2;
+  ctx.lineWidth = 2;
 
   ctx.beginPath();
 
-  ctx.moveTo(
-    start.x,
-    start.y
-  );
+  ctx.moveTo(x, y);
 
-  ctx.lineTo(
-    start.x +
-      Math.cos(angle) *
-      maxLength,
-
-    start.y +
-      Math.sin(angle) *
-      maxLength
-  );
+  ctx.lineTo(endX, endY);
 
   ctx.stroke();
 
   ctx.restore();
 
-
   /*
-    PONTO DE IMPACTO VISUAL
-  */
-
-  const targetDistance =
-    ballRadius() * 5;
-
+   * Ponto final.
+   */
   ctx.save();
 
-  ctx.fillStyle =
-    'rgba(255,245,190,.95)';
+  ctx.strokeStyle =
+    'rgba(214,182,104,0.9)';
+
+  ctx.lineWidth = 2;
 
   ctx.beginPath();
 
   ctx.arc(
-    start.x +
-      Math.cos(angle) *
-      targetDistance,
-
-    start.y +
-      Math.sin(angle) *
-      targetDistance,
-
-    4,
-
+    endX,
+    endY,
+    8,
     0,
     Math.PI * 2
   );
 
-  ctx.fill();
+  ctx.stroke();
 
   ctx.restore();
 
-
   /*
-    TACO
-  */
-
+   * Taco.
+   */
   drawCue(
-    start,
-    angle
+    x,
+    y,
+    aim.angle,
+    aim.power
   );
 }
 
+function drawCue(x, y, angle, power) {
+  const maxPull = 120;
 
-/* =========================================================
-   TACO
-========================================================= */
+  const pull =
+    15 + power * maxPull;
 
-function drawCue(start, angle) {
-
-  const power =
-    aim.power || 0;
-
-  const cueLength =
-    270 + power * 100;
-
-  const gap =
-    ballRadius() * 1.5 +
-    power * 90;
-
-  /*
-    O taco fica atrás
-    da bola na direção
-    contrária da tacada.
-  */
+  const cueLength = 350;
 
   const endX =
-    start.x -
-    Math.cos(angle) *
-    (gap + cueLength);
+    x - Math.cos(angle) * (pull + cueLength);
 
   const endY =
-    start.y -
-    Math.sin(angle) *
-    (gap + cueLength);
+    y - Math.sin(angle) * (pull + cueLength);
 
-  const tipX =
-    start.x -
-    Math.cos(angle) *
-    gap;
+  const startX =
+    x - Math.cos(angle) * pull;
 
-  const tipY =
-    start.y -
-    Math.sin(angle) *
-    gap;
+  const startY =
+    y - Math.sin(angle) * pull;
 
   ctx.save();
 
-  ctx.lineCap =
-    'round';
-
   /*
-    sombra do taco
-  */
-
+   * Sombra do taco.
+   */
   ctx.strokeStyle =
-    'rgba(0,0,0,.5)';
+    'rgba(0,0,0,0.55)';
 
-  ctx.lineWidth = 12;
+  ctx.lineWidth = 10;
+  ctx.lineCap = 'round';
 
   ctx.beginPath();
 
   ctx.moveTo(
-    endX + 5,
-    endY + 7
+    startX + 4,
+    startY + 4
   );
 
   ctx.lineTo(
-    tipX + 5,
-    tipY + 7
+    endX + 4,
+    endY + 4
   );
 
   ctx.stroke();
 
   /*
-    corpo dourado/madeira
-  */
-
-  const cueGradient =
-    ctx.createLinearGradient(
-      endX,
-      endY,
-      tipX,
-      tipY
-    );
-
-  cueGradient.addColorStop(
-    0,
-    '#3b1b08'
-  );
-
-  cueGradient.addColorStop(
-    .18,
-    '#b77730'
-  );
-
-  cueGradient.addColorStop(
-    .48,
-    '#f0c36c'
-  );
-
-  cueGradient.addColorStop(
-    .75,
-    '#8a4b1e'
-  );
-
-  cueGradient.addColorStop(
-    1,
-    '#e9dfc7'
-  );
-
-  ctx.strokeStyle =
-    cueGradient;
-
-  ctx.lineWidth = 8;
-
-  ctx.beginPath();
-
-  ctx.moveTo(
+   * Corpo do taco.
+   */
+  const cueGradient = ctx.createLinearGradient(
+    startX,
+    startY,
     endX,
     endY
   );
 
+  cueGradient.addColorStop(
+    0,
+    '#f2e3b0'
+  );
+
+  cueGradient.addColorStop(
+    0.08,
+    '#fff'
+  );
+
+  cueGradient.addColorStop(
+    0.14,
+    '#b88b43'
+  );
+
+  cueGradient.addColorStop(
+    0.75,
+    '#6f401b'
+  );
+
+  cueGradient.addColorStop(
+    1,
+    '#1d0f07'
+  );
+
+  ctx.strokeStyle = cueGradient;
+  ctx.lineWidth = 6;
+
+  ctx.beginPath();
+
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+
+  ctx.stroke();
+
+  /*
+   * Ponta.
+   */
+  ctx.strokeStyle = '#e8e0d0';
+  ctx.lineWidth = 7;
+
+  ctx.beginPath();
+
+  ctx.moveTo(
+    startX,
+    startY
+  );
+
   ctx.lineTo(
-    tipX,
-    tipY
+    startX + Math.cos(angle) * 18,
+    startY + Math.sin(angle) * 18
   );
 
   ctx.stroke();
 
   /*
-    detalhes metálicos
-  */
-
-  ctx.strokeStyle =
-    '#e2bd67';
-
-  ctx.lineWidth = 3;
-
-  const ringDistance =
-    cueLength * .23;
-
+   * Anel dourado.
+   */
   const ringX =
-    tipX -
-    Math.cos(angle) *
-    ringDistance;
+    endX +
+    Math.cos(angle) * 55;
 
   const ringY =
-    tipY -
-    Math.sin(angle) *
-    ringDistance;
+    endY +
+    Math.sin(angle) * 55;
+
+  ctx.strokeStyle = '#d6b668';
+  ctx.lineWidth = 5;
 
   ctx.beginPath();
 
   ctx.moveTo(
-    ringX -
-      Math.sin(angle) * 5,
-    ringY +
-      Math.cos(angle) * 5
+    ringX - Math.cos(angle) * 8,
+    ringY - Math.sin(angle) * 8
   );
 
   ctx.lineTo(
-    ringX +
-      Math.sin(angle) * 5,
-    ringY -
-      Math.cos(angle) * 5
+    ringX + Math.cos(angle) * 8,
+    ringY + Math.sin(angle) * 8
   );
 
   ctx.stroke();
 
   ctx.restore();
 }
+
 /* =========================================================
    HISTÓRICO
 ========================================================= */
 
 async function historyPage() {
-
-  if (!me) {
-    login();
-    return;
-  }
-
   try {
+    const data = await api('/api/history');
 
-    const data =
-      await api('/api/history');
+    const history = Array.isArray(data)
+      ? data
+      : (data.history || []);
 
     A.innerHTML = `
-      <div class="wrap">
-
-        ${nav()}
-
-        <div class="card">
-
-          <h2>
-            📜 Histórico de partidas
-          </h2>
-
-          ${
-            data.matches?.length
-            ? data.matches.map(m => `
-
-              <div class="row">
-
-                <div>
-
-                  <b>
-                    ${esc(m.p1)}
-                    ×
-                    ${esc(m.p2)}
-                  </b>
-
-                  <div class="muted small">
-                    🪙 Aposta:
-                    ${m.stake}
-                  </div>
-
-                </div>
-
-                <div class="small">
-
-                  ${
-                    Number(m.winner_id) ===
-                    Number(me.id)
-
-                    ? `
-                      <span class="gold">
-                        🏆 Vitória
-                      </span>
-                    `
-
-                    : Number(m.winner_id) !==
-                      Number(me.id)
-
-                    ? `
-                      <span class="muted">
-                        Derrota
-                      </span>
-                    `
-
-                    : `
-                      <span class="muted">
-                        Em andamento
-                      </span>
-                    `
-                  }
-
-                </div>
-
-              </div>
-
-            `).join('')
-
-            : `
-              <p class="muted">
-                Nenhuma partida encontrada.
-              </p>
-            `
-          }
-
-        </div>
-
-      </div>
-    `;
-
-  } catch (e) {
-
-    note(e.message);
-  }
-}
-
-
-/* =========================================================
-   DIVULGAR
-========================================================= */
-
-function invite() {
-
-  const link =
-    window.location.origin;
-
-  A.innerHTML = `
-
-    <div class="wrap">
-
       ${nav()}
 
       <div class="card">
+        <h2>📜 Histórico</h2>
 
-        <div class="eyebrow">
-          SINUCA ARENA GK
-        </div>
+        ${
+          history.length
+            ? history.map(historyItem).join('')
+            : `
+              <div class="empty">
+                Nenhuma partida registrada.
+              </div>
+            `
+        }
 
-        <h2>
-          🔗 Divulgue o jogo
-        </h2>
+        <button class="btn secondary" onclick="home()">
+          Voltar
+        </button>
+      </div>
+    `;
+  } catch (error) {
+    A.innerHTML = `
+      ${nav()}
 
-        <p class="muted">
-          Envie esse link para seus amigos
-          entrarem no Sinuca Arena GK.
-        </p>
+      <div class="card">
+        <h2>📜 Histórico</h2>
 
-        <div class="share-link">
-          ${esc(link)}
-        </div>
+        <p>${esc(error.message)}</p>
 
-        <div class="actions">
+        <button class="btn" onclick="historyPage()">
+          Tentar novamente
+        </button>
+      </div>
+    `;
+  }
+}
 
-          <button
-            class="btn"
-            onclick="copyInvite()">
-            📋 Copiar link
-          </button>
+function historyItem(item) {
+  const winner =
+    item.winnerName ||
+    item.winner ||
+    '—';
 
-          <button
-            class="btn dark"
-            onclick="shareInvite()">
-            📲 Compartilhar
-          </button>
+  const stake =
+    Number(item.stake || 0);
 
-        </div>
+  return `
+    <div class="history-item">
+      <div>
+        <strong>
+          ${esc(item.opponentName || item.opponent || 'Partida')}
+        </strong>
 
+        <small>
+          ${esc(item.date || item.createdAt || '')}
+        </small>
       </div>
 
+      <div>
+        🪙 ${stake}
+      </div>
+
+      <div>
+        🏆 ${esc(winner)}
+      </div>
+    </div>
+  `;
+}
+
+/* =========================================================
+   DIVULGAÇÃO
+========================================================= */
+
+function invite() {
+  const url = window.location.href;
+
+  A.innerHTML = `
+    ${nav()}
+
+    <div class="card">
+      <h2>🔗 Divulgar Sinuca Arena GK</h2>
+
+      <p>
+        Convide seus amigos para jogar e disputar
+        fichas em partidas 1×1.
+      </p>
+
+      <div class="invite-box">
+        ${esc(url)}
+      </div>
+
+      <button class="btn" onclick="copyInvite()">
+        📋 Copiar link
+      </button>
+
+      <button class="btn secondary" onclick="shareInvite()">
+        📲 Compartilhar
+      </button>
+
+      <button class="btn secondary" onclick="home()">
+        Voltar
+      </button>
     </div>
   `;
 }
 
 async function copyInvite() {
-
-  const link =
-    window.location.origin;
-
   try {
-
     await navigator.clipboard.writeText(
-      link
+      window.location.href
     );
 
-    note(
-      '✅ Link copiado!'
-    );
-
-  } catch (e) {
-
-    note(
-      'Não foi possível copiar automaticamente.'
-    );
+    note('Link copiado.');
+  } catch (_) {
+    note('Não foi possível copiar automaticamente.');
   }
 }
 
 async function shareInvite() {
+  const url = window.location.href;
 
-  const link =
-    window.location.origin;
+  const text =
+    '🎱 Entre na Sinuca Arena GK! ' +
+    'Desafie seus amigos em partidas 1×1.';
 
-  try {
-
-    if (
-      navigator.share
-    ) {
-
+  if (navigator.share) {
+    try {
       await navigator.share({
-        title:'Sinuca Arena GK',
-        text:'🎱 Venha jogar Sinuca Arena GK comigo!',
-        url:link
+        title: 'Sinuca Arena GK',
+        text,
+        url
       });
 
-    } else {
+      return;
+    } catch (_) {}
+  }
 
-      await copyInvite();
-    }
-
-  } catch (_) {}
+  await copyInvite();
 }
-
 
 /* =========================================================
    ADM
 ========================================================= */
 
 async function admin() {
-
   if (!me?.is_admin) {
-    note('Acesso restrito ao ADM.');
+    note('Acesso restrito.');
     return;
   }
 
   try {
+    const data = await api('/api/players');
 
-    const data =
-      await api('/api/players');
+    const players = Array.isArray(data)
+      ? data
+      : (data.players || []);
 
     A.innerHTML = `
+      ${nav()}
 
-      <div class="wrap">
+      <div class="card">
+        <h2>👑 Painel ADM</h2>
 
-        ${nav()}
+        <p>
+          Libere ou remova fichas dos jogadores.
+        </p>
 
-        <div class="card">
-
-          <div class="eyebrow">
-            ADMINISTRAÇÃO
-          </div>
-
-          <h2>
-            👑 Controle de fichas
-          </h2>
-
-          <p class="muted">
-            Libere ou retire fichas dos jogadores.
-          </p>
-
-        </div>
-
-        <div class="card">
-
+        <div class="admin-list">
           ${
-            data.players?.length
-
-            ? data.players.map(player => `
-
-              <div class="player-row">
-
-                <div class="player-main">
-
-                  <div class="avatar">
-                    ${esc(
-                      (player.display_name || '?')
-                      .slice(0,1)
-                      .toUpperCase()
-                    )}
-                  </div>
-
-                  <div>
-
-                    <b>
-                      ${esc(player.display_name)}
-                    </b>
-
-                    <div class="muted small">
-                      @${esc(player.username)}
-                    </div>
-
-                    <div class="gold small">
-                      🪙 ${player.chips} fichas
-                    </div>
-
-                  </div>
-
+            players.length
+              ? players.map(adminPlayer).join('')
+              : `
+                <div class="empty">
+                  Nenhum jogador.
                 </div>
-
-                <div class="admin-actions">
-
-                  <input
-                    class="input stake-input"
-                    id="admin-${player.id}"
-                    type="number"
-                    min="1"
-                    value="100">
-
-                  <button
-                    class="btn mini"
-                    onclick="addChips(${player.id})">
-                    + Fichas
-                  </button>
-
-                  <button
-                    class="btn dark mini"
-                    onclick="removeChips(${player.id})">
-                    − Fichas
-                  </button>
-
-                </div>
-
-              </div>
-
-            `).join('')
-
-            : `
-              <p class="muted">
-                Nenhum jogador cadastrado.
-              </p>
-            `
+              `
           }
-
         </div>
-
       </div>
     `;
-
-  } catch (e) {
-
-    note(e.message);
+  } catch (error) {
+    note(error.message);
   }
 }
 
-async function addChips(userId) {
+function adminPlayer(player) {
+  const id =
+    player.id ||
+    player._id ||
+    player.userId;
 
+  return `
+    <div class="admin-player">
+      <div>
+        <strong>
+          ${esc(player.username || player.name || 'Jogador')}
+        </strong>
+
+        <small>
+          🪙 ${Number(player.chips || 0)}
+        </small>
+      </div>
+
+      <div class="admin-actions">
+        <input
+          id="chips-${esc(id)}"
+          class="input small-input"
+          type="number"
+          min="1"
+          value="100"
+        >
+
+        <button
+          class="btn small"
+          onclick="addChips('${esc(id)}')"
+        >
+          + Liberar
+        </button>
+
+        <button
+          class="btn danger small"
+          onclick="removeChips('${esc(id)}')"
+        >
+          - Remover
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function addChips(playerId) {
   const input =
-    document.getElementById(
-      'admin-' + userId
-    );
+    document.getElementById(`chips-${playerId}`);
 
-  const amount =
-    Number(input?.value || 0);
+  const amount = Number(input?.value || 0);
 
-  if (
-    !Number.isFinite(amount) ||
-    amount <= 0
-  ) {
-    note('Digite uma quantidade válida.');
+  if (!amount || amount <= 0) {
+    note('Informe uma quantidade válida.');
     return;
   }
 
   try {
+    await api('/api/admin/chips', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: playerId,
+        amount,
+        action: 'add'
+      })
+    });
 
-    await api(
-      '/api/admin/chips',
-      {
-        method:'POST',
-        body:{
-          userId,
-          amount
-        }
-      }
-    );
-
-    note(
-      `✅ ${amount} fichas liberadas.`
-    );
+    note(`${amount} fichas liberadas.`);
 
     admin();
-
-  } catch (e) {
-
-    note(e.message);
+  } catch (error) {
+    note(error.message);
   }
 }
 
-async function removeChips(userId) {
-
+async function removeChips(playerId) {
   const input =
-    document.getElementById(
-      'admin-' + userId
-    );
+    document.getElementById(`chips-${playerId}`);
 
-  const amount =
-    Number(input?.value || 0);
+  const amount = Number(input?.value || 0);
 
-  if (
-    !Number.isFinite(amount) ||
-    amount <= 0
-  ) {
-    note('Digite uma quantidade válida.');
+  if (!amount || amount <= 0) {
+    note('Informe uma quantidade válida.');
     return;
   }
 
   try {
+    await api('/api/admin/chips', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: playerId,
+        amount,
+        action: 'remove'
+      })
+    });
 
-    await api(
-      '/api/admin/chips',
-      {
-        method:'POST',
-        body:{
-          userId,
-          amount:-amount
-        }
-      }
-    );
-
-    note(
-      `🪙 ${amount} fichas retiradas.`
-    );
+    note(`${amount} fichas removidas.`);
 
     admin();
-
-  } catch (e) {
-
-    note(e.message);
+  } catch (error) {
+    note(error.message);
   }
 }
-
 
 /* =========================================================
    SAIR DA PARTIDA
 ========================================================= */
 
 function leaveMatch() {
-
-  if (!match) {
-    home();
-    return;
+  if (sock && match) {
+    sock.emit('leaveMatch', {
+      matchId: match.id
+    });
   }
-
-  const confirmed =
-    window.confirm(
-      'Deseja realmente sair da partida?'
-    );
-
-  if (!confirmed) {
-    return;
-  }
-
-  try {
-
-    if (sock && match?.id) {
-      sock.emit(
-        'leave',
-        match.id
-      );
-    }
-
-  } catch (_) {}
 
   match = null;
   game = null;
-
   canvas = null;
   ctx = null;
 
-  pointerDown = false;
-  pointerId = null;
-
-  aim.active = false;
-  aim.power = 0;
+  resetAim();
 
   home();
 }
-
 
 /* =========================================================
    LOGOUT
 ========================================================= */
 
 function logout() {
-
   try {
-
     if (sock) {
       sock.disconnect();
     }
-
   } catch (_) {}
 
   token = null;
   me = null;
   match = null;
   game = null;
-  canvas = null;
-  ctx = null;
+  challengeBox = null;
 
-  localStorage.removeItem(
-    'token'
-  );
+  localStorage.removeItem('token');
 
   login();
 }
 
+/* =========================================================
+   UTILITÁRIOS DE DESENHO
+========================================================= */
+
+function roundRect(
+  context,
+  x,
+  y,
+  width,
+  height,
+  radius
+) {
+  const r = Math.min(
+    radius,
+    width / 2,
+    height / 2
+  );
+
+  context.beginPath();
+
+  context.moveTo(x + r, y);
+
+  context.arcTo(
+    x + width,
+    y,
+    x + width,
+    y + height,
+    r
+  );
+
+  context.arcTo(
+    x + width,
+    y + height,
+    x,
+    y + height,
+    r
+  );
+
+  context.arcTo(
+    x,
+    y + height,
+    x,
+    y,
+    r
+  );
+
+  context.arcTo(
+    x,
+    y,
+    x + width,
+    y,
+    r
+  );
+
+  context.closePath();
+}
 
 /* =========================================================
-   INICIALIZAÇÃO AUTOMÁTICA
+   ATUALIZAÇÃO DA TELA QUANDO A JANELA MUDA
+========================================================= */
+
+window.addEventListener('resize', () => {
+  if (!canvas) return;
+
+  draw();
+});
+
+/* =========================================================
+   TECLADO
+========================================================= */
+
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    if (pointerDown) {
+      pointerDown = false;
+      pointerId = null;
+
+      resetAim();
+      draw();
+    }
+  }
+});
+
+/* =========================================================
+   INÍCIO
 ========================================================= */
 
 if (token) {
-
   boot();
-
 } else {
-
   login();
-
 }
