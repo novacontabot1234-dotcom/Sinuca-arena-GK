@@ -1,7 +1,7 @@
+
 const express = require('express');
 const http = require('http');
 const path = require('path');
-const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Database = require('better-sqlite3');
@@ -11,996 +11,306 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const db = new Database('arena.db');
-
-const SECRET = process.env.JWT_SECRET || 'CHANGE_THIS_SECRET';
-
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-db.pragma('journal_mode=WAL');
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'gk2026-development-secret-change-in-production';
 
-/* =========================================================
-   BANCO DE DADOS
-========================================================= */
+const db = new Database(path.join(__dirname, 'arena.db'));
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 db.exec(`
-CREATE TABLE IF NOT EXISTS users(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT UNIQUE,
-  display_name TEXT,
-  password_hash TEXT,
-  chips INTEGER DEFAULT 100,
-  wins INTEGER DEFAULT 0,
-  losses INTEGER DEFAULT 0,
-  is_admin INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    chips INTEGER NOT NULL DEFAULT 100,
+    wins INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 
-CREATE TABLE IF NOT EXISTS matches(
-  id TEXT PRIMARY KEY,
-  p1 INTEGER,
-  p2 INTEGER,
-  stake INTEGER,
-  status TEXT,
-  winner INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+  CREATE TABLE IF NOT EXISTS matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    p1 INTEGER NOT NULL,
+    p2 INTEGER NOT NULL,
+    stake INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    winner INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 
-CREATE TABLE IF NOT EXISTS transactions(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER,
-  amount INTEGER,
-  type TEXT,
-  description TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+  CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
-/* =========================================================
-   FUNÇÕES GERAIS
-========================================================= */
-
-const user = id => {
+function user(id) {
   return db.prepare(`
-    SELECT
-      id,
-      username,
-      display_name,
-      chips,
-      wins,
-      losses,
-      is_admin
-    FROM users
-    WHERE id=?
+    SELECT id, username, display_name, chips, wins, losses, is_admin
+    FROM users WHERE id = ?
   `).get(id);
-};
+}
 
-const tx = (id, amount, type, description) => {
-  return db.prepare(`
-    INSERT INTO transactions(
-      user_id,
-      amount,
-      type,
-      description
-    )
-    VALUES(?,?,?,?)
-  `).run(id, amount, type, description);
-};
-
-const tok = u => {
-  return jwt.sign(
-    {
-      id: u.id,
-      admin: !!u.is_admin
-    },
-    SECRET,
-    {
-      expiresIn: '7d'
-    }
-  );
-};
-
-const auth = (req, res, next) => {
-  try {
-    const header = req.headers.authorization || '';
-
-    const token = header.replace('Bearer ', '');
-
-    if (!token) {
-      return res.status(401).json({
-        error: 'Não autenticado'
-      });
-    }
-
-    req.u = jwt.verify(token, SECRET);
-
-    next();
-
-  } catch (e) {
-
-    return res.status(401).json({
-      error: 'Não autenticado'
-    });
-  }
-};
-
-/* =========================================================
-   ADMIN PADRÃO
-========================================================= */
-
-const adminExistente = db
-  .prepare('SELECT * FROM users WHERE username=?')
-  .get('admin');
-
-if (!adminExistente) {
-
-  const hash = bcrypt.hashSync('gk2026', 10);
-
-  const result = db.prepare(`
-    INSERT INTO users(
-      username,
-      display_name,
-      password_hash,
-      chips,
-      is_admin
-    )
-    VALUES(?,?,?,?,1)
-  `).run(
-    'admin',
-    'Administrador',
-    hash,
-    5000
-  );
-
-  tx(
-    result.lastInsertRowid,
-    5000,
-    'credit',
-    'Saldo inicial do ADM'
-  );
-
-} else if (bcrypt.compareSync('1234', adminExistente.password_hash)) {
-
+function transaction(userId, amount, type, description = '') {
   db.prepare(`
-    UPDATE users
-    SET password_hash=?
-    WHERE username=?
-  `).run(
-    bcrypt.hashSync('gk2026', 10),
-    'admin'
+    INSERT INTO transactions (user_id, amount, type, description)
+    VALUES (?, ?, ?, ?)
+  `).run(userId, amount, type, description);
+}
+
+function tokenFor(u) {
+  return jwt.sign(
+    { id: u.id },
+    JWT_SECRET,
+    { expiresIn: '30d' }
   );
 }
 
-/* =========================================================
-   CADASTRO
-========================================================= */
+// Cria o administrador somente quando ainda não existe.
+// Não altera a senha de um administrador já cadastrado.
+if (!db.prepare('SELECT id FROM users WHERE is_admin = 1 LIMIT 1').get()) {
+  const hash = bcrypt.hashSync('gk2026', 12);
+  db.prepare(`
+    INSERT INTO users
+      (username, display_name, password_hash, chips, is_admin)
+    VALUES (?, ?, ?, ?, 1)
+  `).run('admin', 'ADM GK', hash, 5000);
 
-app.post('/api/register', (req, res) => {
+  console.log('Administrador inicial criado: admin');
+}
 
-  const username = String(req.body.username || '')
-    .toLowerCase()
-    .trim();
+function auth(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ')
+    ? header.slice(7)
+    : '';
 
-  const password = String(req.body.password || '');
-
-  /*
-    O game.js novo pode enviar displayName.
-    Caso não envie, usamos o próprio username.
-  */
-
-  const displayName = String(
-    req.body.displayName ||
-    req.body.display_name ||
-    username
-  )
-    .trim()
-    .slice(0, 30);
-
-  if (!username || !password || password.length < 4) {
-
-    return res.status(400).json({
-      error: 'Preencha os dados corretamente.'
-    });
+  if (!token) {
+    return res.status(401).json({ error: 'Faça login para continuar.' });
   }
 
   try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const currentUser = user(decoded.id);
 
-    const hash = bcrypt.hashSync(password, 10);
+    if (!currentUser) {
+      return res.status(401).json({ error: 'Conta não encontrada.' });
+    }
+
+    req.u = currentUser;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Sessão inválida. Entre novamente.' });
+  }
+}
+
+function adminOnly(req, res, next) {
+  if (!req.u || !req.u.is_admin) {
+    return res.status(403).json({ error: 'Acesso exclusivo do ADM.' });
+  }
+  next();
+}
+
+function validInteger(value, min = 0, max = 1000000000) {
+  return Number.isSafeInteger(value) && value >= min && value <= max;
+}
+
+function publicMatch(m) {
+  if (!m) return null;
+
+  const p1 = user(m.p1);
+  const p2 = user(m.p2);
+
+  return {
+    id: m.id,
+    p1: m.p1,
+    p2: m.p2,
+    p1_name: p1?.display_name || 'Jogador 1',
+    p2_name: p2?.display_name || 'Jogador 2',
+    stake: m.stake,
+    status: m.status,
+    winner: m.winner,
+    created_at: m.created_at
+  };
+}
+
+// --------------------------------------------------
+// LOGIN E CADASTRO
+// --------------------------------------------------
+
+app.post('/api/register', (req, res) => {
+  const username = String(req.body.username || '').trim().toLowerCase();
+  const displayName = String(req.body.displayName || req.body.username || '').trim();
+  const password = String(req.body.password || '');
+
+  if (!/^[a-z0-9_]{3,20}$/.test(username)) {
+    return res.status(400).json({
+      error: 'O usuário deve ter de 3 a 20 caracteres: letras, números ou _.'
+    });
+  }
+
+  if (displayName.length < 2 || displayName.length > 30) {
+    return res.status(400).json({ error: 'Informe um nome de 2 a 30 caracteres.' });
+  }
+
+  if (password.length < 4 || password.length > 100) {
+    return res.status(400).json({ error: 'A senha deve ter de 4 a 100 caracteres.' });
+  }
+
+  try {
+    const hash = bcrypt.hashSync(password, 12);
 
     const result = db.prepare(`
-      INSERT INTO users(
-        username,
-        display_name,
-        password_hash,
-        chips
-      )
-      VALUES(?,?,?,100)
-    `).run(
-      username,
-      displayName,
-      hash
-    );
+      INSERT INTO users
+        (username, display_name, password_hash, chips)
+      VALUES (?, ?, ?, 100)
+    `).run(username, displayName, hash);
 
-    tx(
-      result.lastInsertRowid,
-      100,
-      'credit',
-      'Bônus de cadastro'
-    );
+    transaction(result.lastInsertRowid, 100, 'bonus', 'Bônus de cadastro');
 
     const u = user(result.lastInsertRowid);
 
     return res.json({
-      token: tok(u),
-      user: u
+      token: tokenFor(u),
+      user: u,
+      me: u
     });
+  } catch (error) {
+    if (String(error.message).includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Esse nome de usuário já existe.' });
+    }
 
-  } catch (e) {
-
-    return res.status(400).json({
-      error: 'Usuário já existe.'
-    });
+    console.error('Erro no cadastro:', error);
+    return res.status(500).json({ error: 'Não foi possível criar a conta.' });
   }
 });
-
-/* =========================================================
-   LOGIN
-========================================================= */
 
 app.post('/api/login', (req, res) => {
+  const username = String(req.body.username || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
 
-  const username = String(
-    req.body.username || ''
-  )
-    .toLowerCase()
-    .trim();
+  const found = db.prepare(
+    'SELECT * FROM users WHERE username = ?'
+  ).get(username);
 
-  const password = String(
-    req.body.password || ''
-  );
-
-  const u = db.prepare(`
-    SELECT *
-    FROM users
-    WHERE username=?
-  `).get(username);
-
-  if (
-    !u ||
-    !bcrypt.compareSync(
-      password,
-      u.password_hash
-    )
-  ) {
-
-    return res.status(401).json({
-      error: 'Login inválido.'
-    });
+  if (!found || !bcrypt.compareSync(password, found.password_hash)) {
+    return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
   }
+
+  const u = user(found.id);
 
   return res.json({
-    token: tok(u),
-    user: user(u.id)
+    token: tokenFor(u),
+    user: u,
+    me: u
   });
 });
-
-/* =========================================================
-   USUÁRIO LOGADO
-========================================================= */
 
 app.get('/api/me', auth, (req, res) => {
-
-  const u = user(req.u.id);
-
-  if (!u) {
-    return res.status(404).json({
-      error: 'Usuário não encontrado.'
-    });
-  }
-
-  res.json({
-    user: u
-  });
+  res.json({ user: req.u, me: req.u });
 });
 
-/* =========================================================
-   LISTA DE JOGADORES
-========================================================= */
+// --------------------------------------------------
+// JOGADORES E HISTÓRICO
+// --------------------------------------------------
 
 app.get('/api/players', auth, (req, res) => {
-
   const players = db.prepare(`
-    SELECT
-      id,
-      username,
-      display_name,
-      chips,
-      wins,
-      losses
+    SELECT id, username, display_name, chips, wins, losses, is_admin
     FROM users
     WHERE id != ?
-    ORDER BY wins DESC, id ASC
+    ORDER BY display_name COLLATE NOCASE
   `).all(req.u.id);
 
-  res.json({
-    players
-  });
+  res.json({ players });
 });
-
-/* =========================================================
-   HISTÓRICO
-========================================================= */
 
 app.get('/api/history', auth, (req, res) => {
-
-  const matches = db.prepare(`
-    SELECT
-      m.*,
-      a.display_name AS p1_name,
-      b.display_name AS p2_name,
-      w.display_name AS winner_name
+  const history = db.prepare(`
+    SELECT m.*,
+      u1.display_name AS p1_name,
+      u2.display_name AS p2_name
     FROM matches m
-
-    JOIN users a
-      ON a.id = m.p1
-
-    JOIN users b
-      ON b.id = m.p2
-
-    LEFT JOIN users w
-      ON w.id = m.winner
-
-    WHERE m.p1=? OR m.p2=?
-
-    ORDER BY m.created_at DESC
-
-    LIMIT 50
-  `).all(
-    req.u.id,
-    req.u.id
-  );
-
-  const transactions = db.prepare(`
-    SELECT *
-    FROM transactions
-    WHERE user_id=?
-    ORDER BY created_at DESC
+    JOIN users u1 ON u1.id = m.p1
+    JOIN users u2 ON u2.id = m.p2
+    WHERE (m.p1 = ? OR m.p2 = ?)
+      AND m.status IN ('finished', 'cancelled')
+    ORDER BY m.id DESC
     LIMIT 100
-  `).all(req.u.id);
+  `).all(req.u.id, req.u.id);
 
-  res.json({
-    matches,
-    transactions
-  });
+  res.json({ history, matches: history });
 });
 
-/* =========================================================
-   CRIAR DESAFIO
-========================================================= */
-
-app.post('/api/challenge', auth, (req, res) => {
-
-  /*
-    Compatibilidade com os dois formatos:
-
-    novo game.js:
-    opponentId
-
-    código antigo:
-    opponent
-  */
-
-  const opponentId = Number(
-    req.body.opponentId ??
-    req.body.opponent
-  );
-
-  const stake = Math.floor(
-    Number(req.body.stake)
-  );
-
-  const p1 = user(req.u.id);
-  const p2 = user(opponentId);
-
-  if (!p1 || !p2) {
-
-    return res.status(400).json({
-      error: 'Jogador não encontrado.'
-    });
-  }
-
-  if (p1.id === p2.id) {
-
-    return res.status(400).json({
-      error: 'Você não pode desafiar a si mesmo.'
-    });
-  }
-
-  if (!Number.isFinite(stake) || stake < 10) {
-
-    return res.status(400).json({
-      error: 'A aposta mínima é 10 fichas.'
-    });
-  }
-
-  if (p1.chips < stake) {
-
-    return res.status(400).json({
-      error: 'Você não possui fichas suficientes.'
-    });
-  }
-
-  if (p2.chips < stake) {
-
-    return res.status(400).json({
-      error: 'O adversário não possui fichas suficientes.'
-    });
-  }
-
-  const id = crypto.randomUUID();
-
-  db.prepare(`
-    INSERT INTO matches(
-      id,
-      p1,
-      p2,
-      stake,
-      status
-    )
-    VALUES(?,?,?,?,?)
-  `).run(
-    id,
-    p1.id,
-    p2.id,
-    stake,
-    'pending'
-  );
-
-  io.to('u:' + p2.id).emit(
-    'challenge',
-    {
-      matchId: id,
-      to: p2.id,
-      from: p1.id,
-      fromName: p1.display_name,
-      stake
-    }
-  );
-
-  res.json({
-    matchId: id
-  });
-});
-
-/* =========================================================
-   CONSULTAR PARTIDA
-========================================================= */
-
-app.get('/api/match/:id', auth, (req, res) => {
-
-  const m = db.prepare(`
-    SELECT *
-    FROM matches
-    WHERE id=?
-  `).get(req.params.id);
-
-  if (
-    !m ||
-    ![m.p1, m.p2].includes(req.u.id)
-  ) {
-
-    return res.status(404).json({
-      error: 'Partida não encontrada.'
-    });
-  }
-
-  const p1 = user(m.p1);
-  const p2 = user(m.p2);
-
-  const g = games.get(m.id);
-
-  res.json({
-    match: {
-      ...m,
-
-      p1: p1?.display_name || String(m.p1),
-      p2: p2?.display_name || String(m.p2),
-
-      p1_id: m.p1,
-      p2_id: m.p2
-    },
-
-    game: g ? publicGame(g) : null
-  });
-});
-
-/* =========================================================
-   ACEITAR DESAFIO
-========================================================= */
-
-app.post('/api/match/:id/accept', auth, (req, res) => {
-
-  const m = db.prepare(`
-    SELECT *
-    FROM matches
-    WHERE id=?
-  `).get(req.params.id);
-
-  if (
-    !m ||
-    m.p2 !== req.u.id ||
-    m.status !== 'pending'
-  ) {
-
-    return res.status(400).json({
-      error: 'Desafio inválido.'
-    });
-  }
-
-  const p1 = user(m.p1);
-  const p2 = user(m.p2);
-
-  if (!p1 || !p2) {
-
-    return res.status(400).json({
-      error: 'Jogador inválido.'
-    });
-  }
-
-  if (
-    p1.chips < m.stake ||
-    p2.chips < m.stake
-  ) {
-
-    return res.status(400).json({
-      error: 'Saldo insuficiente.'
-    });
-  }
-
-  const run = db.transaction(() => {
-
-    db.prepare(`
-      UPDATE users
-      SET chips=chips-?
-      WHERE id IN (?,?)
-    `).run(
-      m.stake,
-      p1.id,
-      p2.id
-    );
-
-    tx(
-      p1.id,
-      -m.stake,
-      'debit',
-      'Aposta da partida'
-    );
-
-    tx(
-      p2.id,
-      -m.stake,
-      'debit',
-      'Aposta da partida'
-    );
-
-    db.prepare(`
-      UPDATE matches
-      SET status='active'
-      WHERE id=?
-    `).run(m.id);
-  });
-
-  run();
-
-  /*
-    Cria o jogo imediatamente.
-  */
-
-  const activeMatch = db.prepare(`
-    SELECT *
-    FROM matches
-    WHERE id=?
-  `).get(m.id);
-
-  if (!games.has(m.id)) {
-
-    const g = newGame(activeMatch);
-
-    games.set(m.id, g);
-  }
-
-  io.to('u:' + p1.id).emit(
-    'matchAccepted',
-    {
-      matchId: m.id
-    }
-  );
-
-  io.to('u:' + p2.id).emit(
-    'matchAccepted',
-    {
-      matchId: m.id
-    }
-  );
-
-  /*
-    Atualiza carteira.
-  */
-
-  io.to('u:' + p1.id).emit(
-    'wallet',
-    {
-      chips: user(p1.id)?.chips
-    }
-  );
-
-  io.to('u:' + p2.id).emit(
-    'wallet',
-    {
-      chips: user(p2.id)?.chips
-    }
-  );
-
-  res.json({
-    ok: true,
-    matchId: m.id
-  });
-});
-
-/* =========================================================
-   REJEITAR DESAFIO
-========================================================= */
-
-app.post('/api/match/:id/reject', auth, (req, res) => {
-
-  const m = db.prepare(`
-    SELECT *
-    FROM matches
-    WHERE id=?
-  `).get(req.params.id);
-
-  if (
-    !m ||
-    m.p2 !== req.u.id ||
-    m.status !== 'pending'
-  ) {
-
-    return res.status(400).json({
-      error: 'Desafio inválido.'
-    });
-  }
-
-  db.prepare(`
-    UPDATE matches
-    SET status='rejected'
-    WHERE id=?
-  `).run(m.id);
-
-  io.to('u:' + m.p1).emit(
-    'matchRejected',
-    {
-      matchId: m.id
-    }
-  );
-
-  io.to('u:' + m.p2).emit(
-    'matchRejected',
-    {
-      matchId: m.id
-    }
-  );
-
-  res.json({
-    ok: true
-  });
-});
-
-/* =========================================================
-   FINALIZAR PARTIDA POR API
-========================================================= */
-
-app.post('/api/match/:id/finish', auth, (req, res) => {
-
-  const m = db.prepare(`
-    SELECT *
-    FROM matches
-    WHERE id=?
-  `).get(req.params.id);
-
-  const winner = Number(
-    req.body.winner
-  );
-
-  if (
-    !m ||
-    m.status !== 'active' ||
-    ![m.p1, m.p2].includes(req.u.id) ||
-    ![m.p1, m.p2].includes(winner)
-  ) {
-
-    return res.status(400).json({
-      error: 'Partida inválida.'
-    });
-  }
-
-  finishDb(
-    m.id,
-    winner
-  );
-
-  const g = games.get(m.id);
-
-  if (g) {
-    g.winner = winner;
-    g.moving = false;
-  }
-
-  io.to('m:' + m.id).emit(
-    'gameOver',
-    {
-      matchId: m.id,
-      winner
-    }
-  );
-
-  res.json({
-    ok: true
-  });
-});
-
-/* =========================================================
-   ADMIN - LISTAR USUÁRIOS
-========================================================= */
-
-app.get('/api/admin/users', auth, (req, res) => {
-
-  if (!req.u.admin) {
-
-    return res.status(403).json({
-      error: 'ADM somente.'
-    });
-  }
-
-  const users = db.prepare(`
-    SELECT
-      id,
-      username,
-      display_name,
-      chips,
-      wins,
-      losses
-    FROM users
-    ORDER BY id DESC
-  `).all();
-
-  res.json({
-    users
-  });
-});
-
-/* =========================================================
-   ADMIN - LIBERAR / RETIRAR FICHAS
-========================================================= */
-
-app.post('/api/admin/chips', auth, (req, res) => {
-
-  if (!req.u.admin) {
-
-    return res.status(403).json({
-      error: 'ADM somente.'
-    });
-  }
-
-  const id = Number(
-    req.body.userId
-  );
-
-  const amount = Math.floor(
-    Number(req.body.amount)
-  );
-
-  /*
-    Compatibilidade:
-
-    action: add
-    action: remove
-  */
-
-  const action = String(
-    req.body.action || 'add'
-  ).toLowerCase();
-
-  const add = action === 'add';
-
-  const u = user(id);
-
-  if (!u) {
-
-    return res.status(400).json({
-      error: 'Usuário não encontrado.'
-    });
-  }
-
-  if (
-    !Number.isFinite(amount) ||
-    amount <= 0
-  ) {
-
-    return res.status(400).json({
-      error: 'Quantidade inválida.'
-    });
-  }
-
-  if (
-    !add &&
-    u.chips < amount
-  ) {
-
-    return res.status(400).json({
-      error: 'O jogador não possui fichas suficientes.'
-    });
-  }
-
-  const finalAmount = add
-    ? amount
-    : -amount;
-
-  db.prepare(`
-    UPDATE users
-    SET chips=chips+?
-    WHERE id=?
-  `).run(
-    finalAmount,
-    id
-  );
-
-  tx(
-    id,
-    finalAmount,
-    add ? 'credit' : 'debit',
-    add
-      ? 'Fichas liberadas pelo ADM'
-      : 'Fichas retiradas pelo ADM'
-  );
-
-  const updated = user(id);
-
-  io.to('u:' + id).emit(
-    'wallet',
-    {
-      chips: updated.chips
-    }
-  );
-
-  res.json({
-    user: updated
-  });
-});
-
-/* =========================================================
-   MOTOR DE SINUCA 1V1
-========================================================= */
+// --------------------------------------------------
+// ESTADO DAS PARTIDAS
+// --------------------------------------------------
 
 const TABLE_W = 1.75;
 const TABLE_H = 1;
-
 const BALL_R = 0.0255;
 const POCKET_R = 0.065;
-
 const FRICTION = 2.25;
 const MAX_SPEED = 1.55;
-
 const DT = 1 / 120;
 
 const pockets = [
   { x: 0, y: 0 },
-  { x: 0.5, y: 0 },
-  { x: 1.75, y: 0 },
-
-  { x: 0, y: 1 },
-  { x: 0.5, y: 1 },
-  { x: 1.75, y: 1 }
+  { x: TABLE_W / 2, y: 0 },
+  { x: TABLE_W, y: 0 },
+  { x: 0, y: TABLE_H },
+  { x: TABLE_W / 2, y: TABLE_H },
+  { x: TABLE_W, y: TABLE_H }
 ];
 
 const games = new Map();
+const runningTimers = new Map();
 
-const colors = {
-  1: 'solid',
-  2: 'solid',
-  3: 'solid',
-  4: 'solid',
-  5: 'solid',
-  6: 'solid',
-  7: 'solid',
-
-  9: 'stripe',
-  10: 'stripe',
-  11: 'stripe',
-  12: 'stripe',
-  13: 'stripe',
-  14: 'stripe',
-  15: 'stripe'
-};
-
-/* =========================================================
-   CRIAR BOLAS
-========================================================= */
+function ballColor(id) {
+  if (id === 0) return '#f5f0df';
+  if (id === 8) return '#111111';
+  if ([1, 9].includes(id)) return '#f0c92e';
+  if ([2, 10].includes(id)) return '#315fd4';
+  if ([3, 11].includes(id)) return '#d93636';
+  if ([4, 12].includes(id)) return '#8d4bc4';
+  if ([5, 13].includes(id)) return '#ed8435';
+  if ([6, 14].includes(id)) return '#2e9a5b';
+  return '#a92f36';
+}
 
 function makeBalls() {
-
-  const balls = [];
-
-  /*
-    Bola branca.
-  */
-
-  balls.push({
+  const balls = [{
     id: 0,
     x: 0.36,
     y: 0.5,
     vx: 0,
     vy: 0,
     pocketed: false
-  });
+  }];
 
-  /*
-    Rack.
-  */
-
-  const rack = [
-    1,
-    10,
-    2,
-    11,
-    8,
-    3,
-    12,
-    4,
-    13,
-    5,
-    14,
-    6,
-    15,
-    7,
-    9
-  ];
-
-  const spacing = BALL_R * 2.04;
+  const order = [1, 10, 2, 11, 8, 3, 12, 4, 13, 5, 14, 6, 15, 7, 9];
   const apexX = 1.26;
+  const spacing = BALL_R * 2.04;
+  let index = 0;
 
-  let k = 0;
-
-  for (
-    let row = 0;
-    row < 5;
-    row++
-  ) {
-
-    for (
-      let col = 0;
-      col <= row;
-      col++
-    ) {
-
-      const x =
-        apexX +
-        row *
-        spacing *
-        0.86;
-
-      const y =
-        0.5 +
-        (
-          col -
-          row / 2
-        ) *
-        spacing;
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col <= row; col++) {
+      const id = order[index++];
 
       balls.push({
-        id: rack[k++],
-        x,
-        y,
+        id,
+        x: apexX + row * spacing * 0.8660254,
+        y: 0.5 + (col - row / 2) * spacing,
         vx: 0,
         vy: 0,
         pocketed: false
@@ -1011,75 +321,35 @@ function makeBalls() {
   return balls;
 }
 
-/* =========================================================
-   NOVA PARTIDA
-========================================================= */
-
 function newGame(m) {
-
   return {
     matchId: m.id,
-
     p1: m.p1,
     p2: m.p2,
-
     stake: m.stake,
-
-    /*
-      Primeiro jogador começa.
-    */
-
     currentPlayer: m.p1,
-
     moving: false,
-
     winner: null,
-
-    groups: {
-      p1: null,
-      p2: null
-    },
-
+    groups: { [m.p1]: null, [m.p2]: null },
     breakShot: true,
-
     balls: makeBalls(),
-
-    beforePocketed: []
+    beforePocketed: [],
+    shotCount: 0
   };
 }
 
-/* =========================================================
-   ESTADO PÚBLICO DO JOGO
-========================================================= */
-
 function publicGame(g) {
-
   return {
     matchId: g.matchId,
-
     p1: g.p1,
     p2: g.p2,
-
     stake: g.stake,
-
-    /*
-      currentPlayer é usado pelo servidor.
-
-      turn é enviado também para o
-      game.js novo.
-    */
-
     currentPlayer: g.currentPlayer,
     turn: g.currentPlayer,
-
     moving: g.moving,
-
     winner: g.winner,
-
     groups: g.groups,
-
     breakShot: g.breakShot,
-
     balls: g.balls.map(b => ({
       id: b.id,
       x: b.x,
@@ -1089,1171 +359,707 @@ function publicGame(g) {
   };
 }
 
-/* =========================================================
-   ENVIAR ESTADO
-========================================================= */
-
 function broadcastGame(g) {
-
-  io
-    .to('m:' + g.matchId)
-    .emit(
-      'gameState',
-      publicGame(g)
-    );
+  io.to(`m:${g.matchId}`).emit('gameState', publicGame(g));
 }
 
-/* =========================================================
-   FÍSICA
-========================================================= */
-
-function speed(b) {
-
-  return Math.hypot(
-    b.vx,
-    b.vy
-  );
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function anyMoving(g) {
-
-  return g.balls.some(
-    b =>
-      !b.pocketed &&
-      speed(b) > 0.012
-  );
+function distance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
-
-/* =========================================================
-   CAÇAPA
-========================================================= */
-
-function pocketBall(g, b) {
-
-  b.pocketed = true;
-
-  b.vx = 0;
-  b.vy = 0;
-}
-
-/* =========================================================
-   PASSO DA FÍSICA
-========================================================= */
 
 function physicsStep(g) {
-
-  /*
-    Movimento.
-  */
-
   for (const b of g.balls) {
-
     if (b.pocketed) continue;
+
+    const speed = Math.hypot(b.vx, b.vy);
+
+    if (speed > 0) {
+      const newSpeed = Math.max(0, speed - FRICTION * DT);
+      const ratio = speed > 0 ? newSpeed / speed : 0;
+      b.vx *= ratio;
+      b.vy *= ratio;
+    }
 
     b.x += b.vx * DT;
     b.y += b.vy * DT;
 
-    /*
-      Verifica caçapas.
-    */
-
     for (const p of pockets) {
-
-      if (
-        Math.hypot(
-          b.x - p.x,
-          b.y - p.y
-        ) < POCKET_R
-      ) {
-
-        pocketBall(g, b);
-
+      if (distance(b, p) < POCKET_R) {
+        b.pocketed = true;
+        b.vx = 0;
+        b.vy = 0;
         break;
       }
     }
 
     if (b.pocketed) continue;
 
-    /*
-      Bordas.
-    */
-
     if (b.x < BALL_R) {
-
       b.x = BALL_R;
-      b.vx = Math.abs(b.vx) * 0.96;
+      b.vx = Math.abs(b.vx) * 0.94;
     }
 
-    if (
-      b.x >
-      TABLE_W - BALL_R
-    ) {
-
-      b.x =
-        TABLE_W - BALL_R;
-
-      b.vx =
-        -Math.abs(b.vx) * 0.96;
+    if (b.x > TABLE_W - BALL_R) {
+      b.x = TABLE_W - BALL_R;
+      b.vx = -Math.abs(b.vx) * 0.94;
     }
 
     if (b.y < BALL_R) {
-
       b.y = BALL_R;
-      b.vy = Math.abs(b.vy) * 0.96;
+      b.vy = Math.abs(b.vy) * 0.94;
     }
 
-    if (
-      b.y >
-      TABLE_H - BALL_R
-    ) {
-
-      b.y =
-        TABLE_H - BALL_R;
-
-      b.vy =
-        -Math.abs(b.vy) * 0.96;
+    if (b.y > TABLE_H - BALL_R) {
+      b.y = TABLE_H - BALL_R;
+      b.vy = -Math.abs(b.vy) * 0.94;
     }
   }
 
-  /*
-    Colisões bola x bola.
-  */
-
-  for (
-    let i = 0;
-    i < g.balls.length;
-    i++
-  ) {
-
+  for (let i = 0; i < g.balls.length; i++) {
     const a = g.balls[i];
-
     if (a.pocketed) continue;
 
-    for (
-      let j = i + 1;
-      j < g.balls.length;
-      j++
-    ) {
-
+    for (let j = i + 1; j < g.balls.length; j++) {
       const b = g.balls[j];
-
       if (b.pocketed) continue;
 
       let dx = b.x - a.x;
       let dy = b.y - a.y;
+      let dist = Math.hypot(dx, dy);
+      const minDist = BALL_R * 2;
 
-      let dist =
-        Math.hypot(dx, dy);
+      if (dist >= minDist) continue;
 
-      const min =
-        BALL_R * 2;
-
-      if (dist === 0) {
-
-        dx = min;
+      if (dist < 0.000001) {
+        dx = 0.0001;
         dy = 0;
-        dist = min;
+        dist = 0.0001;
       }
 
-      if (dist < min) {
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const overlap = minDist - dist;
 
-        const nx =
-          dx / dist;
+      a.x -= nx * overlap / 2;
+      a.y -= ny * overlap / 2;
+      b.x += nx * overlap / 2;
+      b.y += ny * overlap / 2;
 
-        const ny =
-          dy / dist;
+      const relVx = a.vx - b.vx;
+      const relVy = a.vy - b.vy;
+      const relative = relVx * nx + relVy * ny;
 
-        const overlap =
-          min - dist;
-
-        /*
-          Afasta as bolas.
-        */
-
-        a.x -=
-          nx *
-          overlap /
-          2;
-
-        a.y -=
-          ny *
-          overlap /
-          2;
-
-        b.x +=
-          nx *
-          overlap /
-          2;
-
-        b.y +=
-          ny *
-          overlap /
-          2;
-
-        /*
-          Impulso.
-        */
-
-        const rvx =
-          b.vx - a.vx;
-
-        const rvy =
-          b.vy - a.vy;
-
-        const relativeVelocity =
-          rvx * nx +
-          rvy * ny;
-
-        if (
-          relativeVelocity < 0
-        ) {
-
-          const impulse =
-            -relativeVelocity *
-            0.985;
-
-          a.vx -=
-            impulse * nx;
-
-          a.vy -=
-            impulse * ny;
-
-          b.vx +=
-            impulse * nx;
-
-          b.vy +=
-            impulse * ny;
-        }
+      if (relative > 0) {
+        a.vx -= relative * nx;
+        a.vy -= relative * ny;
+        b.vx += relative * nx;
+        b.vy += relative * ny;
       }
-    }
-  }
-
-  /*
-    Atrito.
-  */
-
-  const damp =
-    Math.exp(
-      -FRICTION * DT
-    );
-
-  for (const b of g.balls) {
-
-    if (b.pocketed) continue;
-
-    b.vx *= damp;
-    b.vy *= damp;
-
-    if (
-      speed(b) < 0.006
-    ) {
-
-      b.vx = 0;
-      b.vy = 0;
     }
   }
 }
 
-/* =========================================================
-   BOLAS NOVAS QUE CAÍRAM
-========================================================= */
-
-function newPocketed(g) {
-
-  return g.balls
-    .filter(
-      b =>
-        b.pocketed &&
-        !g.beforePocketed.includes(
-          b.id
-        )
-    )
-    .map(
-      b => b.id
-    );
-}
-
-/* =========================================================
-   BOLAS RESTANTES DO GRUPO
-========================================================= */
-
-function remainingType(
-  g,
-  type,
-  userId
-) {
-
-  const own =
-    g.groups.p1?.userId === userId
-      ? g.groups.p1.type
-      : g.groups.p2?.userId === userId
-        ? g.groups.p2.type
-        : null;
-
-  if (!own) return true;
-
-  return g.balls.some(
-    b =>
-      !b.pocketed &&
-      colors[b.id] === own
+function anyMoving(g) {
+  return g.balls.some(b =>
+    !b.pocketed && Math.hypot(b.vx, b.vy) > 0.012
   );
 }
 
-/* =========================================================
-   GRUPO DO JOGADOR
-========================================================= */
+function finishMatch(g, winnerId) {
+  if (g.winner !== null) return false;
 
-function groupForUser(
-  g,
-  uid
-) {
+  const m = db.prepare(
+    'SELECT * FROM matches WHERE id = ?'
+  ).get(g.matchId);
 
-  if (
-    g.groups.p1?.userId === uid
-  ) {
-    return g.groups.p1.type;
-  }
+  if (!m || m.status !== 'active') return false;
 
-  if (
-    g.groups.p2?.userId === uid
-  ) {
-    return g.groups.p2.type;
-  }
+  const loserId = winnerId === m.p1 ? m.p2 : m.p1;
+  const prize = m.stake * 2;
 
-  return null;
+  const complete = db.transaction(() => {
+    const updated = db.prepare(`
+      UPDATE matches
+      SET status = 'finished', winner = ?
+      WHERE id = ? AND status = 'active'
+    `).run(winnerId, m.id);
+
+    if (updated.changes !== 1) return false;
+
+    db.prepare(
+      'UPDATE users SET chips = chips + ?, wins = wins + 1 WHERE id = ?'
+    ).run(prize, winnerId);
+
+    db.prepare(
+      'UPDATE users SET losses = losses + 1 WHERE id = ?'
+    ).run(loserId);
+
+    transaction(winnerId, prize, 'prize', `Vitória na partida ${m.id}`);
+
+    return true;
+  });
+
+  if (!complete()) return false;
+
+  g.winner = winnerId;
+  g.moving = false;
+
+  const winner = user(winnerId);
+  const loser = user(loserId);
+
+  io.to(`m:${m.id}`).emit('gameOver', {
+    matchId: m.id,
+    winner: winnerId,
+    winnerName: winner?.display_name || 'Vencedor',
+    loserName: loser?.display_name || 'Adversário',
+    prize
+  });
+
+  io.to(`u:${winnerId}`).emit('wallet', { chips: winner?.chips });
+  io.to(`u:${loserId}`).emit('wallet', { chips: loser?.chips });
+
+  return true;
 }
 
-/* =========================================================
-   FINALIZAR NO BANCO
-========================================================= */
+function endTurn(g) {
+  const shooter = g.currentPlayer;
+  const opponent = shooter === g.p1 ? g.p2 : g.p1;
 
-function finishDb(
-  matchId,
-  winner
-) {
+  const newlyPocketed = g.balls.filter(
+    b => b.pocketed && !g.beforePocketed.includes(b.id)
+  );
 
-  const m = db.prepare(`
-    SELECT *
-    FROM matches
-    WHERE id=?
-  `).get(matchId);
+  const cueBall = g.balls.find(b => b.id === 0);
+  const scratched = !!cueBall?.pocketed;
 
-  if (
-    !m ||
-    m.status !== 'active'
-  ) {
+  const objectBalls = newlyPocketed.filter(b => b.id !== 0);
+  const eightBallPocketed = objectBalls.some(b => b.id === 8);
+
+  let foul = scratched;
+
+  if (eightBallPocketed) {
+    const group = g.groups[shooter];
+
+    const remaining = group
+      ? g.balls.filter(b =>
+          !b.pocketed &&
+          (group === 'solid' ? b.id >= 1 && b.id <= 7 : b.id >= 9 && b.id <= 15)
+        )
+      : [];
+
+    const won = !foul && group !== null && remaining.length === 0;
+
+    if (won) {
+      finishMatch(g, shooter);
+    } else {
+      finishMatch(g, opponent);
+    }
+
     return;
   }
 
-  const prize =
-    m.stake * 2;
+  if (!g.breakShot && g.groups[shooter]) {
+    const own = g.groups[shooter];
 
-  const loser =
-    winner === m.p1
-      ? m.p2
-      : m.p1;
-
-  const run = db.transaction(() => {
-
-    /*
-      Prêmio.
-    */
-
-    db.prepare(`
-      UPDATE users
-      SET
-        chips=chips+?,
-        wins=wins+1
-      WHERE id=?
-    `).run(
-      prize,
-      winner
-    );
-
-    /*
-      Derrota.
-    */
-
-    db.prepare(`
-      UPDATE users
-      SET losses=losses+1
-      WHERE id=?
-    `).run(
-      loser
-    );
-
-    /*
-      Histórico financeiro.
-    */
-
-    tx(
-      winner,
-      prize,
-      'credit',
-      'Prêmio da vitória'
-    );
-
-    /*
-      Finaliza partida.
-    */
-
-    db.prepare(`
-      UPDATE matches
-      SET
-        status='finished',
-        winner=?
-      WHERE id=?
-    `).run(
-      winner,
-      matchId
-    );
-  });
-
-  run();
-
-  /*
-    Atualiza carteira dos jogadores.
-  */
-
-  const m2 = db.prepare(`
-    SELECT *
-    FROM matches
-    WHERE id=?
-  `).get(matchId);
-
-  if (m2) {
-
-    io.to('u:' + m2.p1).emit(
-      'wallet',
-      {
-        chips: user(m2.p1)?.chips
-      }
-    );
-
-    io.to('u:' + m2.p2).emit(
-      'wallet',
-      {
-        chips: user(m2.p2)?.chips
-      }
-    );
-  }
-}
-
-/* =========================================================
-   FINAL DA TACADA
-========================================================= */
-
-function endTurn(g) {
-
-  const pocketed =
-    newPocketed(g);
-
-  const uid =
-    g.currentPlayer;
-
-  const cuePocketed =
-    pocketed.includes(0);
-
-  const eight =
-    pocketed.includes(8);
-
-  const object =
-    pocketed.filter(
-      id =>
-        id !== 0 &&
-        id !== 8
-    );
-
-  let shooterType =
-    groupForUser(
-      g,
-      uid
-    );
-
-  /*
-    Define os grupos na primeira bola
-    válida encaçapada.
-  */
-
-  if (
-    !g.groups.p1 &&
-    !g.groups.p2 &&
-    object.length
-  ) {
-
-    const t =
-      colors[object[0]];
-
-    if (uid === g.p1) {
-
-      g.groups.p1 = {
-        userId: g.p1,
-        type: t
-      };
-
-      g.groups.p2 = {
-        userId: g.p2,
-        type:
-          t === 'solid'
-            ? 'stripe'
-            : 'solid'
-      };
-
-    } else {
-
-      g.groups.p2 = {
-        userId: g.p2,
-        type: t
-      };
-
-      g.groups.p1 = {
-        userId: g.p1,
-        type:
-          t === 'solid'
-            ? 'stripe'
-            : 'solid'
-      };
+    if (objectBalls.some(b =>
+      own === 'solid' ? b.id >= 9 && b.id <= 15 : b.id >= 1 && b.id <= 7
+    )) {
+      foul = true;
     }
-
-    shooterType = t;
   }
 
-  /*
-    Bola 8.
-  */
-
-  if (eight) {
-
-    const legal =
-      shooterType &&
-      !remainingType(
-        g,
-        shooterType,
-        uid
-      );
-
-    g.winner =
-      legal && !cuePocketed
-        ? uid
-        : (
-            uid === g.p1
-              ? g.p2
-              : g.p1
-          );
-
-    finishDb(
-      g.matchId,
-      g.winner
-    );
-
-    return true;
-  }
-
-  /*
-    Saída da tacada inicial.
-  */
-
-  if (g.breakShot) {
-
+  if (g.breakShot && objectBalls.length > 0 && !foul) {
     g.breakShot = false;
 
-    if (
-      object.length === 0
-    ) {
+    const first = objectBalls.find(b => b.id !== 8);
 
-      g.currentPlayer =
-        uid === g.p1
-          ? g.p2
-          : g.p1;
-
-    } else {
-
-      g.currentPlayer =
-        uid;
+    if (first && !g.groups[g.p1] && !g.groups[g.p2]) {
+      const group = first.id <= 7 ? 'solid' : 'stripe';
+      g.groups[shooter] = group;
+      g.groups[opponent] = group === 'solid' ? 'stripe' : 'solid';
     }
-
-    /*
-      Reposiciona branca se caiu.
-    */
-
-    if (cuePocketed) {
-
-      const cue =
-        g.balls.find(
-          b => b.id === 0
-        );
-
-      if (cue) {
-
-        cue.pocketed = false;
-
-        cue.x = 0.36;
-        cue.y = 0.5;
-
-        cue.vx = 0;
-        cue.vy = 0;
-      }
-    }
-
-    return false;
-  }
-
-  /*
-    Verifica bola do próprio grupo.
-  */
-
-  const legalOwn =
-    object.some(
-      id =>
-        shooterType &&
-        colors[id] === shooterType
-    );
-
-  /*
-    Falta.
-  */
-
-  const foul =
-    cuePocketed ||
-    (
-      shooterType &&
-      object.some(
-        id =>
-          colors[id] !== shooterType
-      )
-    );
-
-  /*
-    Se encaçapou corretamente,
-    continua jogando.
-
-    Caso contrário,
-    passa para o adversário.
-  */
-
-  if (
-    !foul &&
-    legalOwn
-  ) {
-
-    g.currentPlayer =
-      uid;
-
   } else {
-
-    g.currentPlayer =
-      uid === g.p1
-        ? g.p2
-        : g.p1;
+    g.breakShot = false;
   }
 
-  /*
-    Se a branca caiu,
-    recoloca na mesa.
-  */
-
-  if (cuePocketed) {
-
-    const cue =
-      g.balls.find(
-        b => b.id === 0
-      );
-
-    if (cue) {
-
-      cue.pocketed = false;
-
-      cue.x = 0.36;
-      cue.y = 0.5;
-
-      cue.vx = 0;
-      cue.vy = 0;
-    }
+  if (scratched && cueBall) {
+    cueBall.pocketed = false;
+    cueBall.x = 0.36;
+    cueBall.y = 0.5;
+    cueBall.vx = 0;
+    cueBall.vy = 0;
   }
 
-  return false;
+  const ownGroup = g.groups[shooter];
+
+  const ownPocketed = ownGroup
+    ? objectBalls.some(b =>
+        ownGroup === 'solid' ? b.id >= 1 && b.id <= 7 : b.id >= 9 && b.id <= 15
+      )
+    : objectBalls.length > 0;
+
+  if (foul || !ownPocketed) {
+    g.currentPlayer = opponent;
+  }
+
+  g.moving = false;
 }
 
-/* =========================================================
-   EXECUTAR TACADA
-========================================================= */
+function runShot(g, angle, power) {
+  const cue = g.balls.find(b => b.id === 0);
 
-function runShot(
-  g,
-  angle,
-  power
-) {
+  if (!cue || cue.pocketed || g.winner !== null) return;
 
-  const cue =
-    g.balls.find(
-      b => b.id === 0
-    );
+  cue.vx = Math.cos(angle) * MAX_SPEED * power;
+  cue.vy = Math.sin(angle) * MAX_SPEED * power;
 
-  if (!cue) return;
-
-  /*
-    Velocidade da branca.
-  */
-
-  cue.vx =
-    Math.cos(angle) *
-    MAX_SPEED *
-    power;
-
-  cue.vy =
-    Math.sin(angle) *
-    MAX_SPEED *
-    power;
-
-  /*
-    Guarda bolas que já estavam
-    encaçapadas antes da tacada.
-  */
-
-  g.beforePocketed =
-    g.balls
-      .filter(
-        b => b.pocketed
-      )
-      .map(
-        b => b.id
-      );
+  g.beforePocketed = g.balls
+    .filter(b => b.pocketed)
+    .map(b => b.id);
 
   g.moving = true;
+  g.shotCount++;
 
   broadcastGame(g);
 
-  let safety = 0;
+  const startedAt = Date.now();
+  let ticks = 0;
 
-  const timer =
-    setInterval(() => {
+  const timer = setInterval(() => {
+    if (!games.has(g.matchId) || g.winner !== null) {
+      clearInterval(timer);
+      runningTimers.delete(g.matchId);
+      return;
+    }
 
-      /*
-        Quatro passos de física
-        por atualização.
-      */
+    for (let i = 0; i < 4; i++) {
+      physicsStep(g);
+    }
 
-      for (
-        let i = 0;
-        i < 4;
-        i++
-      ) {
+    ticks++;
 
-        physicsStep(g);
-      }
+    if (ticks % 2 === 0) {
+      broadcastGame(g);
+    }
 
-      safety++;
+    if (!anyMoving(g) || Date.now() - startedAt > 30000) {
+      clearInterval(timer);
+      runningTimers.delete(g.matchId);
 
-      /*
-        Atualiza os jogadores
-        frequentemente.
-      */
-
-      if (
-        safety % 2 === 0
-      ) {
-
-        broadcastGame(g);
-      }
-
-      /*
-        Terminou a tacada.
-      */
-
-      if (
-        !anyMoving(g) ||
-        safety > 900
-      ) {
-
-        clearInterval(timer);
-
-        g.moving = false;
-
-        endTurn(g);
-
-        broadcastGame(g);
-
-        /*
-          Vitória.
-        */
-
-        if (g.winner) {
-
-          io.to(
-            'm:' + g.matchId
-          ).emit(
-            'gameOver',
-            {
-              matchId: g.matchId,
-              winner: g.winner
-            }
-          );
-
-        } else {
-
-          /*
-            Novo turno.
-          */
-
-          io.to(
-            'm:' + g.matchId
-          ).emit(
-            'turn',
-            {
-              matchId: g.matchId,
-              currentPlayer:
-                g.currentPlayer
-            }
-          );
+      for (const b of g.balls) {
+        if (Math.hypot(b.vx, b.vy) < 0.012) {
+          b.vx = 0;
+          b.vy = 0;
         }
       }
 
-    }, 16);
+      endTurn(g);
+      broadcastGame(g);
+
+      if (g.winner === null) {
+        io.to(`m:${g.matchId}`).emit('turn', {
+          currentPlayer: g.currentPlayer
+        });
+      }
+
+      return;
+    }
+  }, 16);
+
+  runningTimers.set(g.matchId, timer);
 }
 
-/* =========================================================
-   SOCKET.IO - AUTENTICAÇÃO
-========================================================= */
+// --------------------------------------------------
+// DESAFIOS
+// --------------------------------------------------
 
-io.use((socket, next) => {
+app.post('/api/challenge', auth, (req, res) => {
+  const opponentId = Number(req.body.opponentId ?? req.body.opponent);
+  const stake = Number(req.body.stake);
 
-  try {
+  if (!validInteger(opponentId, 1) || opponentId === req.u.id) {
+    return res.status(400).json({ error: 'Escolha outro jogador.' });
+  }
 
-    const token =
-      socket.handshake
-        ?.auth
-        ?.token;
+  if (!validInteger(stake, 10, 1000000)) {
+    return res.status(400).json({ error: 'A aposta deve ser de pelo menos 10 fichas.' });
+  }
 
-    if (!token) {
+  const opponent = user(opponentId);
 
-      return next(
-        new Error(
-          'Não autenticado'
-        )
-      );
+  if (!opponent) {
+    return res.status(404).json({ error: 'Jogador não encontrado.' });
+  }
+
+  if (req.u.chips < stake) {
+    return res.status(400).json({ error: 'Você não tem fichas suficientes.' });
+  }
+
+  if (opponent.chips < stake) {
+    return res.status(400).json({ error: 'O adversário não tem fichas suficientes.' });
+  }
+
+  const result = db.prepare(`
+    INSERT INTO matches (p1, p2, stake, status)
+    VALUES (?, ?, ?, 'pending')
+  `).run(req.u.id, opponentId, stake);
+
+  const m = db.prepare('SELECT * FROM matches WHERE id = ?')
+    .get(result.lastInsertRowid);
+
+  io.to(`u:${opponentId}`).emit('challenge', {
+    match: publicMatch(m),
+    from: user(req.u.id)
+  });
+
+  res.json({ match: publicMatch(m), id: m.id });
+});
+
+app.get('/api/match/:id', auth, (req, res) => {
+  const id = Number(req.params.id);
+
+  const m = db.prepare('SELECT * FROM matches WHERE id = ?').get(id);
+
+  if (!m) {
+    return res.status(404).json({ error: 'Partida não encontrada.' });
+  }
+
+  if (m.p1 !== req.u.id && m.p2 !== req.u.id) {
+    return res.status(403).json({ error: 'Você não participa desta partida.' });
+  }
+
+  const g = games.get(m.id);
+
+  res.json({
+    match: publicMatch(m),
+    game: g ? publicGame(g) : null
+  });
+});
+
+app.post('/api/match/:id/accept', auth, (req, res) => {
+  const id = Number(req.params.id);
+
+  const result = db.transaction(() => {
+    const m = db.prepare('SELECT * FROM matches WHERE id = ?').get(id);
+
+    if (!m) return { error: 'Partida não encontrada.', code: 404 };
+
+    if (m.p2 !== req.u.id) {
+      return { error: 'Somente o jogador convidado pode aceitar.', code: 403 };
     }
 
-    socket.user =
-      jwt.verify(
-        token,
-        SECRET
-      );
+    if (m.status !== 'pending') {
+      return { error: 'Este desafio não está mais disponível.', code: 409 };
+    }
 
-    next();
+    const p1 = user(m.p1);
+    const p2 = user(m.p2);
 
-  } catch (e) {
+    if (!p1 || !p2) {
+      return { error: 'Um dos jogadores não existe.', code: 400 };
+    }
 
-    next(
-      new Error(
-        'Não autenticado'
-      )
+    if (p1.chips < m.stake || p2.chips < m.stake) {
+      db.prepare(`
+        UPDATE matches SET status = 'cancelled'
+        WHERE id = ? AND status = 'pending'
+      `).run(id);
+
+      return { error: 'Um dos jogadores não tem fichas suficientes.', code: 400 };
+    }
+
+    const debit1 = db.prepare(`
+      UPDATE users SET chips = chips - ?
+      WHERE id = ? AND chips >= ?
+    `).run(m.stake, m.p1, m.stake);
+
+    const debit2 = db.prepare(`
+      UPDATE users SET chips = chips - ?
+      WHERE id = ? AND chips >= ?
+    `).run(m.stake, m.p2, m.stake);
+
+    if (debit1.changes !== 1 || debit2.changes !== 1) {
+      throw new Error('Saldo insuficiente durante a aceitação.');
+    }
+
+    const updated = db.prepare(`
+      UPDATE matches SET status = 'active'
+      WHERE id = ? AND status = 'pending'
+    `).run(id);
+
+    if (updated.changes !== 1) {
+      throw new Error('O desafio já foi respondido.');
+    }
+
+    transaction(m.p1, -m.stake, 'stake', `Aposta na partida ${id}`);
+    transaction(m.p2, -m.stake, 'stake', `Aposta na partida ${id}`);
+
+    return {
+      match: db.prepare('SELECT * FROM matches WHERE id = ?').get(id)
+    };
+  })();
+
+  if (result.error) {
+    return res.status(result.code).json({ error: result.error });
+  }
+
+  const m = result.match;
+
+  if (!games.has(m.id)) {
+    games.set(m.id, newGame(m));
+  }
+
+  const g = games.get(m.id);
+
+  io.to(`u:${m.p1}`).emit('matchAccepted', {
+    match: publicMatch(m),
+    game: publicGame(g)
+  });
+
+  io.to(`u:${m.p2}`).emit('matchAccepted', {
+    match: publicMatch(m),
+    game: publicGame(g)
+  });
+
+  io.to(`u:${m.p1}`).emit('wallet', { chips: user(m.p1)?.chips });
+  io.to(`u:${m.p2}`).emit('wallet', { chips: user(m.p2)?.chips });
+
+  res.json({ match: publicMatch(m), game: publicGame(g) });
+});
+
+app.post('/api/match/:id/reject', auth, (req, res) => {
+  const id = Number(req.params.id);
+
+  const m = db.prepare('SELECT * FROM matches WHERE id = ?').get(id);
+
+  if (!m) {
+    return res.status(404).json({ error: 'Partida não encontrada.' });
+  }
+
+  if (m.p2 !== req.u.id) {
+    return res.status(403).json({ error: 'Somente o jogador convidado pode recusar.' });
+  }
+
+  const result = db.prepare(`
+    UPDATE matches SET status = 'cancelled'
+    WHERE id = ? AND status = 'pending'
+  `).run(id);
+
+  if (result.changes !== 1) {
+    return res.status(409).json({ error: 'Este desafio já foi respondido.' });
+  }
+
+  io.to(`u:${m.p1}`).emit('challengeRejected', { matchId: id });
+  res.json({ ok: true });
+});
+
+// Não permita que o navegador escolha o vencedor.
+// O resultado deve ser decidido pelo motor do jogo.
+app.post('/api/match/:id/finish', auth, (req, res) => {
+  res.status(403).json({
+    error: 'O resultado é definido pelo servidor durante a partida.'
+  });
+});
+
+// --------------------------------------------------
+// PAINEL ADMINISTRATIVO
+// --------------------------------------------------
+
+app.get('/api/admin/users', auth, adminOnly, (req, res) => {
+  const users = db.prepare(`
+    SELECT id, username, display_name, chips, wins, losses, is_admin, created_at
+    FROM users
+    ORDER BY id DESC
+  `).all();
+
+  res.json({ users });
+});
+
+app.post('/api/admin/chips', auth, adminOnly, (req, res) => {
+  const userId = Number(req.body.userId);
+  const amount = Number(req.body.amount);
+  const action = String(req.body.action || 'add');
+
+  if (!validInteger(userId, 1)) {
+    return res.status(400).json({ error: 'Jogador inválido.' });
+  }
+
+  if (!validInteger(amount, 1, 100000000)) {
+    return res.status(400).json({ error: 'Quantidade de fichas inválida.' });
+  }
+
+  if (!['add', 'remove'].includes(action)) {
+    return res.status(400).json({ error: 'Ação inválida.' });
+  }
+
+  const target = user(userId);
+
+  if (!target) {
+    return res.status(404).json({ error: 'Jogador não encontrado.' });
+  }
+
+  const delta = action === 'add' ? amount : -amount;
+
+  const result = db.transaction(() => {
+    const changed = action === 'add'
+      ? db.prepare(`
+          UPDATE users SET chips = chips + ?
+          WHERE id = ?
+        `).run(amount, userId)
+      : db.prepare(`
+          UPDATE users SET chips = chips - ?
+          WHERE id = ? AND chips >= ?
+        `).run(amount, userId, amount);
+
+    if (changed.changes !== 1) return false;
+
+    transaction(
+      userId,
+      delta,
+      action === 'add' ? 'admin_add' : 'admin_remove',
+      `Alteração pelo ADM ${req.u.username}`
     );
+
+    return true;
+  })();
+
+  if (!result) {
+    return res.status(400).json({
+      error: 'O jogador não possui fichas suficientes para essa retirada.'
+    });
+  }
+
+  const updatedUser = user(userId);
+
+  io.to(`u:${userId}`).emit('wallet', { chips: updatedUser.chips });
+
+  res.json({
+    ok: true,
+    user: updatedUser,
+    chips: updatedUser.chips
+  });
+});
+
+// --------------------------------------------------
+// SOCKET.IO: JOGO ONLINE
+// --------------------------------------------------
+
+io.use((socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+
+    if (!token) {
+      return next(new Error('Faça login para jogar.'));
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const currentUser = user(decoded.id);
+
+    if (!currentUser) {
+      return next(new Error('Jogador não encontrado.'));
+    }
+
+    socket.user = currentUser;
+    next();
+  } catch {
+    next(new Error('Sessão inválida. Entre novamente.'));
   }
 });
 
-/* =========================================================
-   SOCKET.IO
-========================================================= */
+io.on('connection', socket => {
+  const player = socket.user;
 
-io.on(
-  'connection',
-  socket => {
+  socket.join(`u:${player.id}`);
 
-    /*
-      Sala pessoal do usuário.
-    */
+  socket.emit('connected', {
+    user: user(player.id)
+  });
 
-    socket.join(
-      'u:' + socket.user.id
-    );
+  socket.on('join', () => {
+    socket.join(`u:${player.id}`);
+  });
 
-    /* =====================================================
-       ENTRAR NA PARTIDA
+  socket.on('joinMatch', data => {
+    const matchId = Number(data?.matchId ?? data?.id);
 
-       Aceita:
-       joinMatch
-       join
-    ===================================================== */
+    if (!validInteger(matchId, 1)) return;
 
-    const joinMatch = matchId => {
+    const m = db.prepare('SELECT * FROM matches WHERE id = ?')
+      .get(matchId);
 
-      if (!matchId) return;
+    if (!m) return;
 
-      const id =
-        String(matchId);
+    if (m.p1 !== player.id && m.p2 !== player.id) return;
+    if (m.status !== 'active') return;
 
-      const m =
-        db.prepare(`
-          SELECT *
-          FROM matches
-          WHERE id=?
-        `).get(id);
-
-      if (
-        !m ||
-        ![m.p1, m.p2].includes(
-          socket.user.id
-        )
-      ) {
-        return;
-      }
-
-      socket.join(
-        'm:' + id
-      );
-
-      /*
-        Só entra no jogo ativo.
-      */
-
-      if (
-        m.status !== 'active'
-      ) {
-        return;
-      }
-
-      /*
-        Recupera o jogo existente
-        ou cria um novo.
-      */
-
-      let g =
-        games.get(id);
-
-      if (!g) {
-
-        g = newGame(m);
-
-        games.set(
-          id,
-          g
-        );
-      }
-
-      /*
-        Envia estado imediatamente.
-      */
-
-      socket.emit(
-        'gameState',
-        publicGame(g)
-      );
-    };
-
-    /*
-      Novo game.js.
-    */
-
-    socket.on(
-      'joinMatch',
-      joinMatch
-    );
-
-    /*
-      Compatibilidade com versão anterior.
-    */
-
-    socket.on(
-      'join',
-      joinMatch
-    );
-
-    /* =====================================================
-       TACADA
-    ===================================================== */
-
-    socket.on(
-      'shot',
-      data => {
-
-        if (
-          !data ||
-          !data.matchId
-        ) {
-          return;
-        }
-
-        const matchId =
-          String(data.matchId);
-
-        const g =
-          games.get(matchId);
-
-        if (!g) return;
-
-        /*
-          Não permite tacada durante
-          outra tacada.
-        */
-
-        if (
-          g.winner ||
-          g.moving
-        ) {
-          return;
-        }
-
-        /*
-          Confirma jogador.
-        */
-
-        if (
-          ![
-            g.p1,
-            g.p2
-          ].includes(
-            socket.user.id
-          )
-        ) {
-          return;
-        }
-
-        /*
-          Confirma turno.
-        */
-
-        if (
-          g.currentPlayer !==
-          socket.user.id
-        ) {
-          return;
-        }
-
-        const angle =
-          Number(data.angle);
-
-        const power =
-          clampServer(
-            Number(data.power),
-            0.08,
-            1
-          );
-
-        if (
-          !Number.isFinite(angle) ||
-          !Number.isFinite(power)
-        ) {
-          return;
-        }
-
-        runShot(
-          g,
-          angle,
-          power
-        );
-      }
-    );
-
-    /* =====================================================
-       SAIR DA PARTIDA
-    ===================================================== */
-
-    socket.on(
-      'leaveMatch',
-      matchId => {
-
-        if (!matchId) return;
-
-        socket.leave(
-          'm:' + String(matchId)
-        );
-      }
-    );
-
-    /*
-      Compatibilidade com versão anterior.
-    */
-
-    socket.on(
-      'leave',
-      matchId => {
-
-        if (!matchId) return;
-
-        socket.leave(
-          'm:' + String(matchId)
-        );
-      }
-    );
-  }
-);
-
-/* =========================================================
-   LIMITADOR
-========================================================= */
-
-function clampServer(
-  value,
-  min,
-  max
-) {
-
-  return Math.max(
-    min,
-    Math.min(
-      max,
-      value
-    )
-  );
-}
-
-/* =========================================================
-   LIMPEZA DE PARTIDAS FINALIZADAS
-========================================================= */
-
-setInterval(() => {
-
-  for (
-    const [matchId, g]
-    of games
-  ) {
-
-    if (
-      g.winner
-    ) {
-
-      /*
-        Mantém o resultado por
-        um pequeno período para
-        os jogadores receberem
-        o gameOver.
-      */
-
-      setTimeout(() => {
-
-        const current =
-          games.get(matchId);
-
-        if (
-          current === g
-        ) {
-
-          games.delete(
-            matchId
-          );
-        }
-
-      }, 30000);
+    if (!games.has(m.id)) {
+      games.set(m.id, newGame(m));
     }
-  }
 
-}, 10000);
+    socket.join(`m:${m.id}`);
 
-/* =========================================================
-   SERVIDOR
-========================================================= */
+    const g = games.get(m.id);
 
-const PORT =
-  process.env.PORT || 3000;
+    socket.emit('gameState', publicGame(g));
+    socket.to(`m:${m.id}`).emit('playerJoined', {
+      userId: player.id,
+      displayName: player.display_name
+    });
+  });
 
-server.listen(
-  PORT,
-  '0.0.0.0',
-  () => {
+  socket.on('shot', data => {
+    const matchId = Number(data?.matchId);
+    const angle = Number(data?.angle);
+    const power = Number(data?.power);
 
-    console.log(
-      'Sinuca Arena GK online na porta ' +
-      PORT
-    );
-  }
-);
+    if (!validInteger(matchId, 1)) return;
+    if (!Number.isFinite(angle) || !Number.isFinite(power)) return;
+
+    const m = db.prepare('SELECT * FROM matches WHERE id = ?')
+      .get(matchId);
+
+    if (!m || m.status !== 'active') return;
+    if (m.p1 !== player.id && m.p2 !== player.id) return;
+
+    const g = games.get(matchId);
+
+    if (!g || g.winner !== null || g.moving) return;
+    if (g.currentPlayer !== player.id) return;
+
+    const cue = g.balls.find(b => b.id === 0);
+
+    if (!cue || cue.pocketed) return;
+
+    const safePower = clamp(power, 0.08, 1);
+
+    runShot(g, angle, safePower);
+  });
+
+  socket.on('leaveMatch', data => {
+    const matchId = Number(data?.matchId ?? data?.id);
+
+    if (validInteger(matchId, 1)) {
+      socket.leave(`m:${matchId}`);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    // A desconexão não encerra nem declara um vencedor automaticamente.
+  });
+});
+
+// --------------------------------------------------
+// INICIALIZAÇÃO
+// --------------------------------------------------
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, service: 'Sinuca Arena GK' });
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Sinuca Arena GK rodando na porta ${PORT}`);
+});
